@@ -8,6 +8,7 @@ const path = require('path');
 const db = require('./lib/db');
 const { computeRisk } = require('./lib/risk');
 const { recommend } = require('./lib/recommend');
+const { analyze: analyzeJournal, speedStats } = require('./lib/journal-analyze');
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -156,7 +157,8 @@ app.get('/api/my-status', requireAuth(['personnel']), (req, res) => {
   const mine = db.prepare(`SELECT date, stress, sleep_hours FROM checkins WHERE personnel_id = ? ORDER BY date DESC LIMIT 30`).all(pid);
   const accessed = db.prepare(`SELECT a.action, a.at, u.name AS actor, u.role FROM audit_log a
     JOIN users u ON u.id = a.actor_id WHERE a.target_personnel = ? ORDER BY a.at DESC LIMIT 10`).all(pid);
-  send(res, 200, { risk: r, checkins: mine.reverse(), accessed });
+  const asmts = db.prepare(`SELECT date, type, score FROM assessments WHERE personnel_id = ? ORDER BY date DESC, id DESC LIMIT 5`).all(pid);
+  send(res, 200, { risk: r, checkins: mine.reverse(), accessed, assessments: asmts });
 });
 
 /* ---------------- welfare officer: flagged roster ---------------- */
@@ -191,6 +193,47 @@ app.get('/api/personnel/:id', requireAuth(['welfare']), (req, res) => {
 const J_GOAL = 750, J_BLUE = 400, J_STREAK_MIN = 250;
 function jWords(t) { t = String(t || '').trim(); return t ? t.split(/\s+/).length : 0; }
 
+const JOURNAL_LEVELS = [
+  [0, 'Blank Page'], [3, 'Inkling'], [7, 'Steady Hand'], [14, 'Momentum'],
+  [30, 'Habit Builder'], [60, 'Wordsmith'], [100, 'Marathoner'], [180, 'Devoted'], [365, 'Legend of the Page']
+];
+function journalLevel(points) {
+  let name = JOURNAL_LEVELS[0][1];
+  for (const [at, n] of JOURNAL_LEVELS) if (points >= at) name = n;
+  const next = JOURNAL_LEVELS.find(([at]) => at > points);
+  return { name, points, nextAt: next ? next[0] : null };
+}
+function journalStats(pid) {
+  const rows = db.prepare('SELECT date, words, time_sec FROM journal_entries WHERE personnel_id = ? ORDER BY date').all(pid);
+  const goalDates = new Set(rows.filter(r => r.words >= J_GOAL).map(r => r.date));
+  const totalWords = rows.reduce((n, r) => n + r.words, 0);
+  const totalTime = rows.reduce((n, r) => n + (r.time_sec || 0), 0);
+  let current = 0, d = new Date();
+  if (!goalDates.has(d.toISOString().slice(0, 10))) d.setUTCDate(d.getUTCDate() - 1);
+  while (goalDates.has(d.toISOString().slice(0, 10))) { current++; d.setUTCDate(d.getUTCDate() - 1); }
+  let longest = 0, run = 0, previous = null;
+  for (const date of [...goalDates].sort()) {
+    run = previous && (new Date(date) - new Date(previous)) / 86400000 === 1 ? run + 1 : 1;
+    previous = date; longest = Math.max(longest, run);
+  }
+  const badges = [];
+  for (const n of [3, 7, 14, 30, 60, 100, 365]) if (longest >= n) badges.push({ type: 'streak', label: `${n}-day streak` });
+  for (const n of [1000, 10000, 25000, 50000, 100000, 250000]) if (totalWords >= n) badges.push({ type: 'words', label: `${n.toLocaleString()} total words` });
+  const byDate = Object.fromEntries(rows.map(r => [r.date, r.words]));
+  const last30 = [];
+  for (let i = 29; i >= 0; i--) {
+    const dt = new Date(); dt.setUTCDate(dt.getUTCDate() - i);
+    const date = dt.toISOString().slice(0, 10);
+    last30.push({ date, words: byDate[date] || 0 });
+  }
+  return {
+    total_words: totalWords, total_days: rows.filter(r => r.words > 0).length,
+    current_streak: current, longest_streak: longest, avg_words: rows.length ? Math.round(totalWords / rows.length) : 0,
+    green_days: goalDates.size, total_time_min: Math.round(totalTime / 60), points: goalDates.size,
+    level: journalLevel(goalDates.size), badges, last30
+  };
+}
+
 app.get('/api/journal/overview', requireAuth(['personnel']), (req, res) => {
   const pid = req.user.personnel_id;
   if (!pid) return send(res, 400, { error: 'No personnel record linked' });
@@ -210,28 +253,63 @@ app.get('/api/journal/overview', requireAuth(['personnel']), (req, res) => {
   send(res, 200, { days, streak, total_days: totals.days, total_words: totals.tw });
 });
 
+app.get('/api/journal/stats', requireAuth(['personnel']), (req, res) => {
+  if (!req.user.personnel_id) return send(res, 400, { error: 'No personnel record linked' });
+  send(res, 200, journalStats(req.user.personnel_id));
+});
+
+app.get('/api/journal/analysis/list', requireAuth(['personnel']), (req, res) => {
+  const pid = req.user.personnel_id;
+  if (!pid) return send(res, 400, { error: 'No personnel record linked' });
+  const days = db.prepare(`SELECT date, words, started_at, updated_at FROM journal_entries
+    WHERE personnel_id = ? AND words > 0 ORDER BY date DESC LIMIT 500`).all(pid);
+  send(res, 200, { days });
+});
+
+app.get('/api/journal/analysis/:date', requireAuth(['personnel']), (req, res) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return send(res, 400, { error: 'Bad date format' });
+  const pid = req.user.personnel_id;
+  if (!pid) return send(res, 400, { error: 'No personnel record linked' });
+  const row = db.prepare(`SELECT date, content, words, time_sec, timeline, started_at, updated_at
+    FROM journal_entries WHERE personnel_id = ? AND date = ?`).get(pid, req.params.date);
+  if (!row) return send(res, 404, { error: 'No journal entry for that date' });
+  let timeline = [];
+  try { timeline = JSON.parse(row.timeline || '[]'); } catch {}
+  send(res, 200, {
+    date: row.date, words: row.words, time_sec: row.time_sec, started_at: row.started_at,
+    updated_at: row.updated_at, analysis: analyzeJournal(row.content), timeline,
+    speed: speedStats(timeline, row.words, row.time_sec)
+  });
+});
+
 app.get('/api/journal/:date', requireAuth(['personnel']), (req, res) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return send(res, 400, { error: 'Bad date format' });
   const pid = req.user.personnel_id;
   if (!pid) return send(res, 400, { error: 'No personnel record linked' });
-  const e = db.prepare(`SELECT date, content, words, time_sec, updated_at FROM journal_entries
+  const e = db.prepare(`SELECT date, content, words, time_sec, timeline, started_at, updated_at FROM journal_entries
     WHERE personnel_id = ? AND date = ?`).get(pid, req.params.date) || null;
   send(res, 200, { entry: e });
 });
 
 app.post('/api/journal', requireAuth(['personnel']), (req, res) => {
-  const { date, content, time_sec } = req.body || {};
+  const { date, content, time_sec, timeline, started_at } = req.body || {};
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) return send(res, 400, { error: 'Bad date format' });
   const pid = req.user.personnel_id;
   if (!pid) return send(res, 400, { error: 'No personnel record linked' });
   const words = jWords(content);
   const prev = db.prepare('SELECT time_sec FROM journal_entries WHERE personnel_id = ? AND date = ?').get(pid, date);
   const t = Math.max(Number(time_sec) || 0, prev ? prev.time_sec : 0);
-  db.prepare(`INSERT INTO journal_entries (personnel_id, date, content, words, time_sec, updated_at)
-    VALUES (?,?,?,?,?,?)
+  const safeTimeline = Array.isArray(timeline) ? timeline.slice(-2000).filter(p => Array.isArray(p) && p.length >= 2 && Number.isFinite(+p[0]) && Number.isFinite(+p[1]))
+    .map(p => [Math.max(0, Math.round(+p[0])), Math.max(0, Math.round(+p[1]))]) : [];
+  const prior = db.prepare('SELECT timeline, started_at FROM journal_entries WHERE personnel_id = ? AND date = ?').get(pid, date);
+  const timelineJson = safeTimeline.length ? JSON.stringify(safeTimeline) : (prior ? prior.timeline : '[]');
+  const started = String(started_at || (prior && prior.started_at) || '').slice(0, 40);
+  db.prepare(`INSERT INTO journal_entries (personnel_id, date, content, words, time_sec, updated_at, timeline, started_at)
+    VALUES (?,?,?,?,?,?,?,?)
     ON CONFLICT(personnel_id, date) DO UPDATE SET content = excluded.content, words = excluded.words,
-      time_sec = excluded.time_sec, updated_at = excluded.updated_at`)
-    .run(pid, date, String(content || ''), words, t, new Date().toISOString());
+      time_sec = excluded.time_sec, updated_at = excluded.updated_at,
+      timeline = excluded.timeline, started_at = excluded.started_at`)
+    .run(pid, date, String(content || ''), words, t, new Date().toISOString(), timelineJson, started);
   send(res, 200, { ok: true, words, saved_at: new Date().toISOString() });
 });
 

@@ -101,6 +101,12 @@
   </main>
 
   <main id="view-journal" class="view hidden">
+    <div class="jr-tabs" role="tablist" aria-label="Journal sections">
+      <button class="jr-tab on" data-jr-pane="write">Write</button>
+      <button class="jr-tab" data-jr-pane="insights">Daily insights</button>
+      <button class="jr-tab" data-jr-pane="progress">Progress</button>
+    </div>
+    <div id="jr-pane-write" class="jr-pane">
     <div class="card wide">
       <div class="row-between">
         <h3>📝 Private reflective journal <span class="pill">visible only to you</span></h3>
@@ -146,6 +152,39 @@
       <h3>Last 14 days</h3>
       <div id="jr-days" class="jr-days"></div>
       <p id="jr-totals" class="muted" style="margin-top:10px"></p>
+    </div>
+    </div>
+
+    <div id="jr-pane-insights" class="jr-pane hidden">
+      <div class="jr-insight-head">
+        <div><h2>Daily writing insights</h2><p class="muted">Private, reflective patterns from your own words—not a diagnosis.</p></div>
+        <select id="jr-an-date" aria-label="Choose journal date"></select>
+      </div>
+      <div id="jr-an-empty" class="card wide hidden"><p class="muted">Write an entry first to see your personal insights.</p></div>
+      <div id="jr-an-content">
+        <div id="jr-an-summary" class="jr-an-summary"></div>
+        <section class="jr-an-box">
+          <h3>How fast you wrote</h3>
+          <canvas id="jr-an-speed" width="1000" height="235"></canvas>
+          <p id="jr-an-speed-note" class="muted"></p>
+        </section>
+        <section class="jr-an-box"><h3>Mindset while writing</h3><div id="jr-an-mindset" class="jr-donuts"></div></section>
+        <div class="jr-an-grid">
+          <section class="jr-an-box"><h3>Feeling mostly</h3><div id="jr-an-feelings" class="jr-emoji-bars"></div></section>
+          <section class="jr-an-box"><h3>Thinking mostly about</h3><div id="jr-an-topics" class="jr-emoji-bars"></div></section>
+          <section class="jr-an-box"><h3>Time orientation</h3><div id="jr-an-time" class="jr-emoji-bars"></div></section>
+          <section class="jr-an-box"><h3>Primary sense</h3><div id="jr-an-senses" class="jr-emoji-bars"></div></section>
+        </div>
+        <section class="jr-an-box"><h3>Us and them</h3><div id="jr-an-pronouns" class="jr-emoji-bars compact"></div></section>
+        <p class="muted jr-privacy-note">🔒 Keyword-based analysis runs on SENTINEL and is visible only to you. It is never sent to commanders, welfare officers, or the risk engine.</p>
+      </div>
+    </div>
+
+    <div id="jr-pane-progress" class="jr-pane hidden">
+      <div id="jr-stat-cards" class="jr-stat-cards"></div>
+      <section class="jr-an-box"><div class="row-between"><h3>Last 30 days</h3><span class="muted">400 blue zone · 750 goal</span></div>
+        <canvas id="jr-stat-chart" width="1000" height="270"></canvas></section>
+      <section class="jr-an-box"><h3>Achievements</h3><div id="jr-badges"></div></section>
     </div>
   </main>
 

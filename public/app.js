@@ -38,6 +38,10 @@ let curView = null;
     localStorage.setItem('sentinel-theme', root.dataset.theme);
     // redraw canvas charts so their colors match the new theme
     if (curView && !$('#app-view').classList.contains('hidden')) showView(curView);
+    if (curView === 'journal') setTimeout(() => {
+      if (jrActivePane === 'insights' && jrLastAnalysis) jrRenderAnalysis(jrLastAnalysis.date);
+      if (jrActivePane === 'progress' && jrLastStats) jrDrawStats(jrLastStats.last30);
+    }, 80);
   };
 
   knob.addEventListener('pointerdown', e => {
@@ -102,7 +106,7 @@ document.querySelectorAll('.linkish').forEach(b =>
 $('#logout').onclick = async () => { await api('/api/logout', { method: 'POST' }); location.reload(); };
 
 const NAVS = {
-  personnel: [['personnel', '🏠 Wellness'], ['journal', '📝 Journal']],
+  personnel: [['dashboard', '🏠 My Dashboard'], ['assessments', '🧩 Assessments'], ['journal', '📝 Journal']],
   commander: [['commander', '🗺️ Unit Dashboard']],
   welfare: [['welfare', '🔔 Alerts & Roster'], ['commander', '🗺️ Unit Dashboard']]
 };
@@ -118,14 +122,15 @@ function boot() {
     b.onclick = () => showView(v);
     nav.appendChild(b);
   });
-  showView(me.role === 'personnel' ? 'personnel' : me.role === 'welfare' ? 'welfare' : 'commander');
+  showView(me.role === 'personnel' ? 'dashboard' : me.role === 'welfare' ? 'welfare' : 'commander');
 }
 function showView(v) {
   curView = v;
   document.querySelectorAll('.view').forEach(x => x.classList.add('hidden'));
   document.querySelectorAll('#nav .btn').forEach(b => b.classList.toggle('on', b.dataset.view === v));
   $('#view-' + v).classList.remove('hidden');
-  if (v === 'personnel') loadPersonnel();
+  if (v === 'dashboard') loadPersonnel();
+  if (v === 'assessments') renderAssessments();
   if (v === 'journal') loadJournal();
   if (v === 'commander') loadCommander();
   if (v === 'welfare') loadWelfare();
@@ -133,32 +138,86 @@ function showView(v) {
 }
 
 /* ==== personnel app (part 3) ==== */
+const avg = a => a.length ? a.reduce((s, v) => s + v, 0) / a.length : null;
 async function loadPersonnel() {
   const j = await api('/api/my-status');
   const r = j.risk;
-  $('#my-risk').innerHTML = `
-    <canvas id="gauge" width="150" height="90"></canvas>
-    <p class="center">Current welfare index: <b style="color:${BAND_COLOR[r.band]}">${r.band}</b></p>
-    ${r.factors.length ? `<p class="muted center" style="margin-top:6px">Support areas detected: ${r.factors.slice(0, 3).map(f => f.label).join(' · ')}</p>` : ''}
-    <p class="muted center" style="margin-top:6px;font-size:13px">This index is used only to offer welfare support — never for discipline.</p>`;
-  drawGauge(r.score, BAND_COLOR[r.band]);
+  const last7 = j.checkins.slice(-7), prev7 = j.checkins.slice(-14, -7);
+  const s7 = avg(last7.map(c => c.stress)), sl7 = avg(last7.map(c => c.sleep_hours));
+  const sPrev = avg(prev7.map(c => c.stress));
+  const trend = s7 != null && sPrev != null ? (s7 - sPrev) : null;
+  const tArr = trend == null ? '' : trend <= -0.5 ? ' 📉 improving' : trend >= 0.5 ? ' 📈 rising' : ' → steady';
+  $('#my-tiles').innerHTML = `
+    <div class="tile">
+      <span class="t-label">Welfare index</span>
+      <span class="t-big" style="color:${BAND_COLOR[r.band]}">${r.score}</span>
+      <span class="t-sub" style="color:${BAND_COLOR[r.band]}">${r.band}</span>
+      <span class="t-note">support-only · never discipline</span>
+    </div>
+    <div class="tile">
+      <span class="t-label">Avg stress (7d)</span>
+      <span class="t-big">${s7 != null ? s7.toFixed(1) : '—'}<small>/10</small></span>
+      <span class="t-sub">${s7 != null ? tArr.trim() : 'no data yet'}</span>
+    </div>
+    <div class="tile">
+      <span class="t-label">Avg sleep (7d)</span>
+      <span class="t-big">${sl7 != null ? sl7.toFixed(1) : '—'}<small>h</small></span>
+      <span class="t-sub">${sl7 != null ? (sl7 >= 7 ? '✓ well rested' : 'below the 7h target') : 'no data yet'}</span>
+    </div>
+    <div class="tile">
+      <span class="t-label">Check-ins (30d)</span>
+      <span class="t-big">${j.checkins.length}<small>/30</small></span>
+      <span class="t-sub">${j.checkins.length >= 20 ? '🔥 great consistency' : 'daily check-ins help spot patterns'}</span>
+    </div>`;
   drawSpark($('#my-chart'), j.checkins.map(c => c.stress));
   $('#my-access').innerHTML = j.accessed.length
     ? j.accessed.map(a => `<div class="access-item">${a.at.slice(0, 10)} — <b>${a.actor}</b> (${a.role}) · ${a.action.replace(/_/g, ' ')}</div>`).join('')
     : '<p class="muted">No one has viewed your record. You are notified whenever a welfare officer does.</p>';
+  lastAsmts = j.assessments || [];
 }
-function drawGauge(score, color) {
-  const cv = $('#gauge'), ctx = cv.getContext('2d');
-  const cx = 75, cy = 80, rad = 60;
-  ctx.clearRect(0, 0, 150, 90);
-  ctx.lineWidth = 14; ctx.lineCap = 'round';
-  ctx.strokeStyle = themeCol('--line');
-  ctx.beginPath(); ctx.arc(cx, cy, rad, Math.PI, 2 * Math.PI); ctx.stroke();
-  ctx.strokeStyle = color;
-  ctx.beginPath(); ctx.arc(cx, cy, rad, Math.PI, Math.PI + (score / 100) * Math.PI); ctx.stroke();
-  ctx.fillStyle = color; ctx.font = 'bold 24px Segoe UI'; ctx.textAlign = 'center';
-  ctx.fillText(score, cx, 74);
+let lastAsmts = [];
+
+/* ---- assessments view (CogniFit-style card grid) ---- */
+const ASMTS = [
+  { id: 'PSS10', icon: '🧠', name: 'Perceived Stress Scale', tag: 'Recommended',
+    desc: 'The standard 10-item scale for how unpredictable and overloaded life feels.',
+    meta: '10 questions · ~3 min', active: true },
+  { id: 'PHQ9', icon: '🌧️', name: 'Mood Check (PHQ-9)', tag: 'Coming soon',
+    desc: 'Widely used screening for low mood and motivation.',
+    meta: '9 questions · ~2 min', active: false },
+  { id: 'GAD7', icon: '🌊', name: 'Anxiety Check (GAD-7)', tag: 'Coming soon',
+    desc: 'Standard 7-item measure of worry and tension.',
+    meta: '7 questions · ~2 min', active: false },
+  { id: 'WHO5', icon: '🌿', name: 'Wellbeing Index (WHO-5)', tag: 'Coming soon',
+    desc: 'Positive wellbeing measure used worldwide.',
+    meta: '5 questions · ~1 min', active: false }
+];
+async function renderAssessments() {
+  if (!lastAsmts.length) {
+    try { lastAsmts = (await api('/api/my-status')).assessments || []; } catch {}
+  }
+  const last = lastAsmts.find(a => a.type === 'PSS10');
+  $('#asmt-grid').innerHTML = ASMTS.map(a => {
+    const mine = a.id === 'PSS10' ? last : null;
+    return `
+    <div class="asmt-card ${a.active ? '' : 'soon'}">
+      <div class="asmt-top"><span class="asmt-icon">${a.icon}</span>
+        <span class="pill ${a.active ? 'pill-hot' : ''}">${a.tag}</span></div>
+      <h4>${a.name}</h4>
+      <p class="muted">${a.desc}</p>
+      <div class="asmt-meta">${a.meta}${mine ? ` · <b style="color:var(--accent)">last: ${mine.score}/100 (${mine.date})</b>` : ''}</div>
+      ${a.active
+        ? `<button class="btn primary asmt-start" data-id="${a.id}">${mine ? 'Retake' : 'Start'} assessment</button>`
+        : `<button class="btn" disabled>Coming soon</button>`}
+    </div>`;
+  }).join('');
+  document.querySelectorAll('.asmt-start').forEach(b => b.onclick = () => {
+    $('#pss-card').classList.remove('hidden');
+    $('#pss-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
 }
+$('#pss-close').onclick = () => $('#pss-card').classList.add('hidden');
+
 function drawSpark(cv, vals) {
   const ctx = cv.getContext('2d');
   ctx.clearRect(0, 0, cv.width, cv.height);
@@ -199,6 +258,8 @@ $('#pss-save').onclick = async () => {
   $('#pss-msg').textContent = `✓ Assessment saved (score ${j.score}/100). A welfare officer will reach out if supportive follow-up would help.`;
   $('#pss-msg').classList.remove('hidden');
   toast('Assessment submitted');
+  lastAsmts = [{ date: new Date().toISOString().slice(0, 10), type: 'PSS10', score: j.score }, ...lastAsmts.filter(a => a.type !== 'PSS10')];
+  renderAssessments();
 };
 
 /* ==== welfare & commander (part 4) ==== */
@@ -364,6 +425,7 @@ async function setIv(id, status) {
 /* ==== private journal (merged from seven50) ==== */
 const J_GOAL = 750, J_BLUE = 400;
 let jrTimer = null, jrStart = null, jrBase = 0, jrDirty = false, jrDate = null;
+let jrTimeline = [], jrStartedAt = '', jrActivePane = 'write', jrLastAnalysis = null, jrLastStats = null;
 
 function jrWords() { const t = $('#jr-editor').value.trim(); return t ? t.split(/\s+/).length : 0; }
 function jrUpdate() {
@@ -386,6 +448,8 @@ async function loadJournal() {
   ]);
   $('#jr-editor').value = entry ? entry.content : '';
   jrBase = entry ? entry.time_sec || 0 : 0;
+  try { jrTimeline = entry && entry.timeline ? JSON.parse(entry.timeline) : []; } catch { jrTimeline = []; }
+  jrStartedAt = (entry && entry.started_at) || (entry && entry.content ? '' : new Date().toISOString());
   jrStart = Date.now();
   $('#jr-streak').textContent = ov.streak ? `🔥 ${ov.streak}-day streak` : '🔥 start your streak today';
   $('#jr-days').innerHTML = ov.days && ov.days.length
@@ -400,6 +464,10 @@ async function loadJournal() {
 
 $('#jr-editor').addEventListener('input', () => {
   jrUpdate(); jrDirty = true;
+  if (!jrStartedAt) jrStartedAt = new Date().toISOString();
+  const sec = Math.round(jrBase + (jrStart ? (Date.now() - jrStart) / 1000 : 0));
+  const last = jrTimeline[jrTimeline.length - 1];
+  if (!last || sec - last[0] >= 2 || Math.abs(jrWords() - last[1]) >= 10) jrTimeline.push([sec, jrWords()]);
   $('#jr-save').textContent = 'typing…';
   clearTimeout(jrTimer);
   jrTimer = setTimeout(saveJournal, 2500); // autosave 2.5s after last keystroke
@@ -534,7 +602,8 @@ $('#jr-lang').addEventListener('change', () => {
 
 async function saveJournal(sync) {
   const body = { date: jrDate, content: $('#jr-editor').value,
-    time_sec: Math.round(jrBase + (jrStart ? (Date.now() - jrStart) / 1000 : 0)) };
+    time_sec: Math.round(jrBase + (jrStart ? (Date.now() - jrStart) / 1000 : 0)),
+    timeline: jrTimeline, started_at: jrStartedAt };
   const req = api('/api/journal', { method: 'POST', body: JSON.stringify(body) });
   if (sync) return req;
   try {
@@ -544,6 +613,97 @@ async function saveJournal(sync) {
   } catch { $('#jr-save').textContent = '⚠ save failed'; }
 }
 setInterval(() => { if (!$('#view-journal').classList.contains('hidden')) jrUpdate(); }, 30000);
+
+/* ---- private 750 Words-style journal analytics ---- */
+document.querySelectorAll('.jr-tab').forEach(b => b.addEventListener('click', () => jrShowPane(b.dataset.jrPane)));
+async function jrShowPane(name) {
+  jrActivePane = name;
+  document.querySelectorAll('.jr-tab').forEach(b => b.classList.toggle('on', b.dataset.jrPane === name));
+  document.querySelectorAll('.jr-pane').forEach(p => p.classList.add('hidden'));
+  $('#jr-pane-' + name).classList.remove('hidden');
+  if (jrDirty) await saveJournal(false);
+  if (name === 'insights') await jrLoadAnalysisList();
+  if (name === 'progress') await jrLoadStats();
+}
+
+async function jrLoadAnalysisList() {
+  const { days } = await api('/api/journal/analysis/list');
+  const empty = !days.length;
+  $('#jr-an-empty').classList.toggle('hidden', !empty);
+  $('#jr-an-content').classList.toggle('hidden', empty);
+  if (empty) return;
+  const sel = $('#jr-an-date'), previous = sel.value;
+  sel.innerHTML = days.map(d => `<option value="${d.date}">${d.date} · ${d.words} words</option>`).join('');
+  if (days.some(d => d.date === previous)) sel.value = previous;
+  await jrRenderAnalysis(sel.value);
+}
+$('#jr-an-date').addEventListener('change', e => jrRenderAnalysis(e.target.value));
+
+async function jrRenderAnalysis(date) {
+  const d = await api('/api/journal/analysis/' + date);
+  jrLastAnalysis = d;
+  const s = d.speed, start = d.started_at ? new Date(d.started_at) : null;
+  const startText = start && !isNaN(start) ? ` starting ${start.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : '';
+  const details = [`${s.wpm || 0} words per minute`];
+  if (d.timeline.length >= 2) details.push(`${s.distractions} distraction${s.distractions === 1 ? '' : 's'}`);
+  details.push(s.minutesToGoal !== null ? `${s.minutesToGoal} minutes to 750 words` : `${s.minutes} minutes spent`);
+  $('#jr-an-summary').innerHTML = `<b>You wrote ${d.words.toLocaleString()} words${startText}</b><span>${details.join(' · ')}</span>`;
+  jrDrawSpeed(d.timeline, d.words, d.time_sec);
+  const m = d.analysis.mindset;
+  const donuts = [
+    ['Introvert', 'Extrovert', m.introvert, '#f0b27a', '#526071'],
+    ['Positive', 'Negative', m.positive, '#45b39d', '#526071'],
+    ['Certain', 'Uncertain', m.certain, '#f4b400', '#526071'],
+    ['Thinking', 'Feeling', m.thinking, '#5dade2', '#e76f51']
+  ];
+  $('#jr-an-mindset').innerHTML = donuts.map(([a,b,p,c1,c2]) => `<div class="jr-donut"><b style="color:${c1}">${a}</b><small>vs ${b}</small><canvas width="132" height="132" data-pct="${p}" data-c1="${c1}" data-c2="${c2}"></canvas></div>`).join('');
+  $('#jr-an-mindset').querySelectorAll('canvas').forEach(jrDrawDonut);
+  jrBars($('#jr-an-feelings'), d.analysis.feelings);
+  jrBars($('#jr-an-topics'), d.analysis.topics);
+  jrBars($('#jr-an-time'), d.analysis.time);
+  jrBars($('#jr-an-senses'), d.analysis.senses);
+  jrBars($('#jr-an-pronouns'), d.analysis.pronouns);
+}
+function jrDrawDonut(cv) {
+  const ctx = cv.getContext('2d'), pct = +cv.dataset.pct, cx = 66, cy = 66, r = 50;
+  ctx.clearRect(0, 0, 132, 132); ctx.lineWidth = 17;
+  ctx.strokeStyle = cv.dataset.c2; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.strokeStyle = cv.dataset.c1; ctx.beginPath(); ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + pct / 100 * Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = themeCol('--ink'); ctx.font = '700 19px Segoe UI'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(pct + '%', cx, cy);
+}
+function jrBars(el, data) {
+  const shown = data.filter(x => x.count > 0).slice(0, 7);
+  if (!shown.length) { el.innerHTML = '<p class="muted">Not enough matching words yet.</p>'; return; }
+  const max = Math.max(...shown.map(x => x.count));
+  el.innerHTML = shown.map(x => `<div class="jr-eb" title="${x.label}: ${x.count}"><span class="jr-eb-count">${x.count}</span><div class="jr-eb-bar" style="height:${Math.max(8, x.count / max * 100)}%;background:${x.color}"></div><span class="jr-eb-emoji">${x.emoji || '●'}</span><small>${x.label}</small></div>`).join('');
+}
+function jrDrawSpeed(timeline, words, timeSec) {
+  const cv = $('#jr-an-speed'), ctx = cv.getContext('2d'), tl = timeline || [];
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  $('#jr-an-speed-note').textContent = tl.length < 2 ? 'Detailed speed samples were not recorded for this older entry; average speed is calculated from total writing time. New writing will show the full curve.' : '';
+  const data = tl.length >= 2 ? tl : [[0, 0], [Math.max(timeSec, 1), words]];
+  const W = cv.width, H = cv.height, l = 48, r = 18, top = 18, bottom = 34;
+  const maxT = Math.max(60, data[data.length - 1][0]), maxW = Math.max(J_GOAL, ...data.map(p => p[1]));
+  const X = s => l + s / maxT * (W-l-r), Y = w => H-bottom-w/maxW*(H-bottom-top);
+  ctx.font = '11px Segoe UI'; ctx.fillStyle = themeCol('--muted'); ctx.strokeStyle = themeCol('--line');
+  for (let w=0; w<=maxW; w+=Math.max(100, Math.ceil(maxW/8/100)*100)) { ctx.beginPath(); ctx.moveTo(l,Y(w));ctx.lineTo(W-r,Y(w));ctx.stroke();ctx.fillText(w,l-35,Y(w)+4); }
+  ctx.strokeStyle = themeCol('--accent'); ctx.lineWidth = 3; ctx.beginPath(); data.forEach(([s,w],i)=>i?ctx.lineTo(X(s),Y(w)):ctx.moveTo(X(s),Y(w)));ctx.stroke();
+}
+
+async function jrLoadStats() {
+  const s = await api('/api/journal/stats'); jrLastStats = s;
+  const cards = [['Total words',s.total_words.toLocaleString()],['Days written',s.total_days],['Current streak','🔥 '+s.current_streak],['Longest streak','🏆 '+s.longest_streak],['Avg words/day',s.avg_words],['750+ days',s.green_days],['Time spent',s.total_time_min+' min'],['Level',s.level.name]];
+  $('#jr-stat-cards').innerHTML = cards.map(([k,v])=>`<div class="jr-stat"><b>${v}</b><span>${k}</span></div>`).join('');
+  $('#jr-badges').innerHTML = s.badges.length ? s.badges.map(b=>`<span class="jr-badge">${b.type==='streak'?'🔥':'📖'} ${b.label}</span>`).join('') : '<p class="muted">No badges yet — write 750 words on 3 consecutive days to earn your first.</p>';
+  jrDrawStats(s.last30);
+}
+function jrDrawStats(days) {
+  const cv=$('#jr-stat-chart'),ctx=cv.getContext('2d'),W=cv.width,H=cv.height,l=42,r=14,t=18,b=35,max=Math.max(J_GOAL,...days.map(d=>d.words)),bw=(W-l-r)/30;
+  ctx.clearRect(0,0,W,H); ctx.strokeStyle=themeCol('--line'); ctx.fillStyle=themeCol('--muted');ctx.font='11px Segoe UI';
+  [J_BLUE,J_GOAL].forEach(g=>{const y=H-b-g/max*(H-b-t);ctx.setLineDash([5,5]);ctx.beginPath();ctx.moveTo(l,y);ctx.lineTo(W-r,y);ctx.stroke();ctx.fillText(g,5,y+4);});ctx.setLineDash([]);
+  days.forEach((d,i)=>{const h=d.words/max*(H-b-t);ctx.fillStyle=d.words>=J_GOAL?themeCol('--accent'):d.words>=J_BLUE?themeCol('--blue'):themeCol('--muted');ctx.fillRect(l+i*bw+2,H-b-h,Math.max(2,bw-4),h);});
+  ctx.fillStyle=themeCol('--muted');ctx.fillText(days[0].date.slice(5),l,H-10);ctx.fillText('today',W-r-34,H-10);
+}
 
 /* ---------------- PSS form render + init ---------------- */
 (function initPss() {
