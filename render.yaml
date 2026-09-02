@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: sentinel-sih
+    runtime: node
+    plan: free
+    branch: dev
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 22.11.0
