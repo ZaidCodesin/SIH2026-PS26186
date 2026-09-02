@@ -41,8 +41,8 @@ header { display: flex; align-items: center; gap: 18px; padding: 10px 22px; back
 .hdr-right { display: flex; align-items: center; gap: 12px; margin-right: 72px; }
 .banner { background: var(--panel2); border-bottom: 1px solid var(--line); padding: 8px 22px; font-size: 14px; }
 
-/* theme toggle — hanging pull-cord, compact, top-right */
-#theme-toggle { position: fixed; top: 0; right: 28px; z-index: 100; width: 48px; height: 136px;
+/* theme toggle — hanging pull-cord, compact, scrolls away with the page */
+#theme-toggle { position: absolute; top: 0; right: 28px; z-index: 100; width: 48px; height: 136px;
   background: none; border: none; cursor: pointer; padding: 0; }
 .cord-swing { position: absolute; top: 0; left: 50%; width: 0; transform-origin: top center; }
 .cord-line { position: absolute; top: 0; left: -1px; width: 2px; height: 108px;
