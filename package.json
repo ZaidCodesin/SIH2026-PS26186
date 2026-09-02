@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "seed": "node lib/seed.js"
+    "seed": "node lib/seed.js",
+    "test": "node test-regression.js"
   },
   "dependencies": {
     "express": "^4.19.2"

@@ -1,75 +1,104 @@
-# SIH2026-PS26186 — SENTINEL
+# SENTINEL — PS 26186
 
-Smart India Hackathon 2026 — Problem Statement **26186**
-**AI-Based Predictive Personnel Stress and Welfare Monitoring System for Uniformed Forces**
-*(Organization: Ministry of Home Affairs — CRPF, Police II Division)*
+Privacy-first personnel stress and welfare monitoring prototype for uniformed forces, built for Smart India Hackathon Problem Statement **26186** (MHA / CRPF).
 
-> **SENTINEL** is a privacy-first welfare platform for uniformed forces: personnel get a private daily journal + voice-ready check-ins, a transparent predictive engine converts HR & wellness signals into explainable stress-risk scores, and commanders/welfare officers get aggregated dashboards and intervention recommendations — **without ever accessing private journals**.
+SENTINEL combines organizational workload records with voluntary wellbeing information to support earlier, humane intervention. It keeps workforce conditions, welfare casework, and private personal reflection as separate data products with different access boundaries.
 
-## ✨ Features
+## Role-specific product
 
-- **📝 Private Journal** — daily 750-word-style journaling (word count, streaks, time tracking, autosave). Journal content is *never* exposed to any dashboard or the risk engine.
-- **🩺 Wellness Check-ins** — daily stress/sleep/mood self-reporting + standardized **PSS-10** assessment.
-- **🧠 Predictive Risk Engine** — transparent 11-factor weighted model (leave denials, overtime trends, deployment pressure, family separation, incident exposure, sleep degradation, disengagement…) → 0–100 score in 4 bands (Low / Watch / Elevated / Critical), every score with **explainable contributing factors**.
-- **🚨 Automated Alerts** — welfare officers auto-notified on Elevated/Critical risk, with deduplication.
-- **🎯 Intervention Recommender** — welfare-focused actions: counseling, rest rotation, workload rebalance, family leave, peer support, medical check — with tracking to completion.
-- **🛡️ Privacy Framework** — k-anonymized commander heatmap (cells <5 suppressed), strict role-based access, full audit log, personnel can see who accessed their record, anonymous check-in option. Welfare-only framing — never disciplinary.
+### Personnel
 
-## 👥 Team
+- Optional confidential check-in for stress, sleep, mood, physical strain and perceived support
+- Comparison between recorded workload and lived experience
+- Visibility into the non-disciplinary HR records used by the prototype
+- Tracked requests to review incorrect workload, leave, deployment or profile data
+- WHO-5, PSS-10, GAD-7 and PHQ-9 guided screeners with source attribution and non-diagnostic results
+- Private 750 Words-style journal with autosave, voice dictation review, progress and reflective text statistics
+- Personal access log showing authorized views of the welfare record
 
-| Member | GitHub | Role |
-|---|---|---|
-| Zaid | [@ZaidCodesin](https://github.com/ZaidCodesin) | Team Lead |
-| *(add teammates)* | @username | Developer |
+### Welfare Officer
 
-## 🧰 Tech Stack
+- Prioritized support case queue and automated alerts
+- Explainable evidence labelled by source (organizational record or voluntary wellness)
+- Individual welfare context excluding private journals and disciplinary records
+- Suggested non-disciplinary interventions: workload review, rest rotation, family leave, voluntary counseling, medical review and peer support
+- Intervention lifecycle from recommended → accepted → completed/declined with outcome notes
+- Queue for personnel-submitted data correction requests
+- Access audit trail and manual model refresh
 
-- **Backend:** Node.js + Express
-- **Database:** SQLite (via `node:sqlite`, zero external DB deps)
-- **Frontend:** Vanilla HTML/CSS/JS (responsive — works on phone browsers)
-- **No external APIs required** — the entire stack runs locally/offline
+### Commander
 
-## 🗂️ Project Structure
+- Unit-level operational conditions: overtime, deployments, leave denials, incident exposure, transfers and training load
+- Aggregated 14-day pulse averages only when at least five personnel responded
+- Organizational action prompts for roster/recovery, leave constraints and post-incident support
+- No names, individual scores, assessment answers, journal content, personal case notes or welfare audit log
 
-```
-├── server.js            # Express API: auth, risk pipeline, dashboards, alerts
-├── lib/
-│   ├── db.js            # SQLite schema (users, personnel, hr_events, checkins…)
-│   ├── risk.js          # 11-factor predictive risk engine (explainable output)
-│   ├── recommend.js     # Intervention recommendation rules
-│   └── seed.js          # Demo data: 150 personnel, 6 months of history
-└── public/              # Single-page app (personnel + welfare + commander views)
-```
+## Evidence and product principles
 
-## 🚀 Getting Started
+- **WHO Mental health at work:** excessive workload, low control, poor support and hazardous work are organizational risks; prevention includes organizational interventions.
+- **HSE Management Standards:** demand, control, support, relationships, role and change should be considered holistically, prioritizing removal or reduction of workplace stressors.
+- **NIOSH:** long/unpredictable hours, hazardous exposure, traumatic events, physical demands and low schedule control are relevant occupational conditions.
+- **WHO-5 / PHQ / GAD / PSS:** screening supports reflection and professional follow-up; it is not diagnosis.
+- **750 Words pattern:** private writing and reflective statistics are useful personal tools, but journal analytics are not clinical signals.
+
+## Safeguards implemented
+
+- Strict server-side role authorization and role-specific endpoints
+- Journal APIs available only to the owning personnel account
+- Journal text/insights never enter organizational scoring
+- Optional non-participation contributes **zero** support-priority points
+- Disciplinary records contribute **zero** points and are excluded from welfare context
+- No false anonymous claim: linked personal check-ins are described honestly as confidential
+- Aggregate pulse values suppressed below five respondents
+- Explainable factors carry source labels
+- Personnel can request review of organizational data
+- CSP/security headers, HTTP-only/secure cookie behavior, validation, output escaping and basic sign-in throttling
+- Startup reconciliation prevents stale alert reasons after model changes
+
+## Prototype limitations
+
+- The support-priority engine is a transparent rules prototype, **not a clinically validated prediction model**.
+- Internal weights are not probabilities of illness, violence, misconduct or operational failure.
+- Biometric integration is not included; future use requires legal authority, explicit purpose, minimization, security and meaningful authorization.
+- Production requires force SSO/MFA, encryption/key management, retention governance, clinical/legal oversight, validation and independent security testing.
+- Demo data is simulated and must not be treated as real CAPF data.
+
+## Run locally
+
+Requires Node.js 22+ (`node:sqlite`).
 
 ```bash
 git clone https://github.com/ZaidCodesin/SIH2026-PS26186.git
 cd SIH2026-PS26186
 npm install
-npm run seed        # loads 150 simulated personnel with 180 days of history
-npm start           # → http://localhost:4400
+npm run seed
+npm test
+npm start
 ```
 
-**Demo logins** (after seeding): `commander / demo123` · `welfare / demo123` · `sepoy.demo / demo123`
+Open `http://localhost:4400`.
 
-## 🔐 Privacy by Design
+Prototype evaluator accounts (password `demo123`):
 
-| Layer | Mechanism |
-|---|---|
-| Commander dashboard | Aggregated unit heatmaps only; k-anonymity (cells <5 suppressed) |
-| Welfare officer | Sees risk indicators + factors; **cannot** access journal content (enforced at API level) |
-| Personnel | Journal is private forever; can view the audit trail of who accessed their record |
-| Data | All-local SQLite storage; `data/` is git-ignored and never published |
+- Personnel: `sepoy.demo`
+- Welfare Officer: `welfare`
+- Commander: `commander`
 
+Credentials appear only inside the explicit **Prototype evaluator access** disclosure, not as production-style quick-login buttons.
 
-## 🌿 Workflow
+## Automated validation
 
-- `main` — stable, working code only (protected: no force-pushes, no deletions)
-- `dev` — integration branch where teammates' feature branches get merged
-- Feature work: branch off `dev` as `feature/<your-feature>` and open a Pull Request into `dev`
+`npm test` starts an isolated server and verifies all role logins, cross-role denials, workload/self-report transparency, data correction workflow, welfare and commander payloads, journal privacy, no penalty for non-participation/disciplinary history, WHO-5 scoring and every journal insight group. Temporary test state is restored afterward.
 
-## 📄 License
+## Main files
 
-TBD
-
+```text
+server.js                 API, sessions, role authorization and dashboards
+lib/db.js                 SQLite schema and migrations
+lib/risk.js               Explainable support-priority rules
+lib/recommend.js          Welfare intervention mapping
+lib/journal-analyze.js    Private reflective writing statistics
+lib/seed.js               Simulated prototype dataset
+public/                   Responsive role-specific web application
+test-regression.js        Authorization/workflow regression suite
+```

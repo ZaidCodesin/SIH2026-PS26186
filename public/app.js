@@ -2,6 +2,7 @@
 /* SENTINEL — frontend app */
 
 const $ = s => document.querySelector(s);
+const esc = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const api = async (url, opts = {}) => {
   const r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', ...opts });
   const j = await r.json().catch(() => ({}));
@@ -10,29 +11,13 @@ const api = async (url, opts = {}) => {
 };
 const BAND_COLOR = { Low: '#2eb872', Watch: '#f4b400', Elevated: '#e67e22', Critical: '#e74c3c' };
 
-/* ---- dark / light theme — pull the cord! (drag the knob) ---- */
+/* ---- restrained dark / light theme control ---- */
 const themeCol = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 let curView = null;
 (function initTheme() {
   const root = document.documentElement;
   root.dataset.theme = localStorage.getItem('sentinel-theme') || 'dark';
   const btn = $('#theme-toggle');
-  const line = btn.querySelector('.cord-line');
-  const knob = btn.querySelector('.cord-knob');
-
-  const MAX = 42, FLIP_AT = 30;   // max stretch px / distance that flips the switch
-  let dragging = false, startY = 0, dy = 0, baseH = 108, fired = false;
-
-  const setPull = d => {
-    line.style.transform = `scaleY(${1 + d / baseH})`;   // cord stretches from its anchor
-    knob.style.transform = `translateY(${d}px)`;
-  };
-  const snapBack = () => {   // springy release
-    line.style.transition = 'transform .4s cubic-bezier(.3,1.7,.5,1)';
-    knob.style.transition = 'transform .4s cubic-bezier(.3,1.7,.5,1)';
-    setPull(0);
-    setTimeout(() => { line.style.transition = ''; knob.style.transition = ''; }, 450);
-  };
   const flip = () => {
     root.dataset.theme = root.dataset.theme === 'light' ? 'dark' : 'light';
     localStorage.setItem('sentinel-theme', root.dataset.theme);
@@ -44,29 +29,7 @@ let curView = null;
     }, 80);
   };
 
-  knob.addEventListener('pointerdown', e => {
-    dragging = true; fired = false; dy = 0;
-    startY = e.clientY; baseH = line.offsetHeight;
-    btn.classList.add('pulling');           // stops the hover sway while gripping
-    knob.setPointerCapture(e.pointerId);
-    e.preventDefault();
-  });
-  knob.addEventListener('pointermove', e => {
-    if (!dragging) return;
-    dy = Math.max(0, Math.min(MAX, e.clientY - startY));
-    setPull(dy);
-    if (!fired && dy >= FLIP_AT) { fired = true; flip(); }   // switch flips mid-pull
-  });
-  const release = () => {
-    if (!dragging) return;
-    dragging = false;
-    btn.classList.remove('pulling');
-    snapBack();
-    if (!fired && dy < 4) flip();            // a plain click still toggles
-    dy = 0;
-  };
-  knob.addEventListener('pointerup', release);
-  knob.addEventListener('pointercancel', release);
+  btn.addEventListener('click', flip);
 })();
 const ASSESSMENTS = {
   WHO5: {
@@ -146,10 +109,30 @@ function toast(msg) {
   clearTimeout(t._tm);
   t._tm = setTimeout(() => t.classList.add('hidden'), 2600);
 }
+function askNote({title,help,confirm='Confirm',required=false}) {
+  const d=$('#action-dialog'), note=$('#dialog-note'); $('#dialog-title').textContent=title;
+  $('#dialog-help').textContent=help||''; $('#dialog-confirm').textContent=confirm; note.value=''; d.showModal(); note.focus();
+  return new Promise(resolve=>{d.onclose=()=>{const accepted=d.returnValue==='default';const value=note.value.trim();resolve(accepted&&(!required||value)?value:null);};});
+}
 
 /* ==== auth & shell (part 2) ==== */
+const PORTALS = {
+  personnel: { label:'Personnel workspace', user:'sepoy.demo' },
+  welfare: { label:'Welfare Officer workspace', user:'welfare' },
+  commander: { label:'Commander workspace', user:'commander' }
+};
+let chosenPortal = null;
+document.querySelectorAll('[data-portal]').forEach(b => b.onclick = () => {
+  chosenPortal = b.dataset.portal; const p = PORTALS[chosenPortal];
+  $('#portal-choice').classList.add('hidden'); $('#signin-form').classList.remove('hidden');
+  $('#portal-label').textContent = p.label; $('#li-user').value = ''; $('#li-pass').value = ''; $('#li-user').focus();
+  $('#demo-options').innerHTML = `<button class="evaluator-fill" type="button">Use ${p.label} demo account</button>`;
+  $('#demo-options .evaluator-fill').onclick = () => { $('#li-user').value=p.user; $('#li-pass').value='demo123'; };
+});
+$('#portal-back').onclick = () => { $('#signin-form').classList.add('hidden'); $('#portal-choice').classList.remove('hidden'); };
 async function login(username, password) {
   me = await api('/api/login', { method: 'POST', body: JSON.stringify({ username, password }) });
+  if (chosenPortal && me.role !== chosenPortal) { await api('/api/logout',{method:'POST'}); throw new Error(`This account belongs to the ${me.role} workspace. Choose the correct portal.`); }
   boot();
 }
 $('#li-btn').onclick = () => {
@@ -158,14 +141,12 @@ $('#li-btn').onclick = () => {
     .catch(e => { $('#li-err').textContent = e.message; $('#li-err').classList.remove('hidden'); });
 };
 $('#li-pass').addEventListener('keydown', e => { if (e.key === 'Enter') $('#li-btn').click(); });
-document.querySelectorAll('.linkish').forEach(b =>
-  b.onclick = () => { $('#li-user').value = b.dataset.quick; $('#li-pass').value = 'demo123'; $('#li-btn').click(); });
 $('#logout').onclick = async () => { await api('/api/logout', { method: 'POST' }); location.reload(); };
 
 const NAVS = {
-  personnel: [['dashboard', '🏠 My Dashboard'], ['assessments', '🧩 Assessments'], ['journal', '📝 Journal']],
-  commander: [['commander', '🗺️ Unit Dashboard']],
-  welfare: [['welfare', '🔔 Alerts & Roster'], ['commander', '🗺️ Unit Dashboard']]
+  personnel: [['dashboard', 'Overview'], ['assessments', 'Assessments'], ['journal', 'Private journal']],
+  commander: [['commander', 'Operational conditions']],
+  welfare: [['welfare', 'Support casework']]
 };
 function boot() {
   $('#login-view').classList.add('hidden');
@@ -206,10 +187,8 @@ async function loadPersonnel() {
   const tArr = trend == null ? '' : trend <= -0.5 ? ' 📉 improving' : trend >= 0.5 ? ' 📈 rising' : ' → steady';
   $('#my-tiles').innerHTML = `
     <div class="tile">
-      <span class="t-label">Welfare index</span>
-      <span class="t-big" style="color:${BAND_COLOR[r.band]}">${r.score}</span>
-      <span class="t-sub" style="color:${BAND_COLOR[r.band]}">${r.band}</span>
-      <span class="t-note">support-only · never discipline</span>
+      <span class="t-label">Support priority</span><span class="t-big" style="color:${BAND_COLOR[r.band]}">${r.band}</span>
+      <span class="t-sub">${r.evidence_count} active indicator${r.evidence_count===1?'':'s'}</span><span class="t-note">Rules prototype · not a diagnosis</span>
     </div>
     <div class="tile">
       <span class="t-label">Avg stress (7d)</span>
@@ -222,16 +201,22 @@ async function loadPersonnel() {
       <span class="t-sub">${sl7 != null ? (sl7 >= 7 ? '✓ well rested' : 'below the 7h target') : 'no data yet'}</span>
     </div>
     <div class="tile">
-      <span class="t-label">Check-ins (30d)</span>
-      <span class="t-big">${j.checkins.length}<small>/30</small></span>
-      <span class="t-sub">${j.checkins.length >= 20 ? '🔥 great consistency' : 'daily check-ins help spot patterns'}</span>
+      <span class="t-label">Recorded overtime (90d)</span><span class="t-big">${j.workload.overtime_hours}<small>h</small></span>
+      <span class="t-sub">From organizational records</span>
     </div>`;
+  const w=j.workload, sr=j.self_report;
+  $('#work-feeling').innerHTML=`<div><p class="eyebrow">Workload and lived experience</p><h2>${j.comparison}</h2><p>This comparison helps avoid assuming that HR records alone explain how you feel.</p></div>
+    <div class="comparison-grid"><div><span>Recorded workload · 90 days</span><b>${w.overtime_hours}h overtime</b><small>${w.deployment_starts} deployments · ${w.leave_denials} leave denials · ${w.incident_exposures} incidents</small></div>
+    <div><span>Your voluntary check-ins · recent 7</span><b>${sr.stress===null?'No recent response':sr.stress+'/10 stress'}</b><small>${sr.sleep===null?'Complete a check-in to compare':sr.sleep+'h sleep · '+sr.responses+' responses'}</small></div></div>`;
+  $('#my-work-records').innerHTML=w.records.length?w.records.map(x=>`<div class="record-row"><time>${esc(x.date)}</time><div><b>${esc(x.type.replace(/_/g,' '))}</b><span>${x.value?esc(x.value)+' '+(x.type==='duty_overtime'?'hours':''):''}${x.note?' · '+esc(x.note):''}</span></div></div>`).join(''):'<p class="muted">No recent records.</p>';
+  $('#correction-list').innerHTML=j.corrections.length?'<h4>Your requests</h4>'+j.corrections.map(x=>`<div class="request-row"><span>${esc(x.category)}</span><b>${esc(x.status)}</b><small>${esc(x.created_at.slice(0,10))}</small></div>`).join(''):'';
   drawSpark($('#my-chart'), j.checkins.map(c => c.stress));
   $('#my-access').innerHTML = j.accessed.length
     ? j.accessed.map(a => `<div class="access-item">${a.at.slice(0, 10)} — <b>${a.actor}</b> (${a.role}) · ${a.action.replace(/_/g, ' ')}</div>`).join('')
     : '<p class="muted">No one has viewed your record. You are notified whenever a welfare officer does.</p>';
   lastAsmts = j.assessments || [];
 }
+$('#correction-submit').onclick=async()=>{try{await api('/api/my-data/correction',{method:'POST',body:JSON.stringify({category:$('#correction-category').value,message:$('#correction-message').value})});$('#correction-message').value='';toast('Review request submitted');loadPersonnel();}catch(e){toast(e.message)}};
 let lastAsmts = [], activeAsmt = null, asmtIndex = 0, asmtAnswers = [];
 const ASMT_LIBRARY = [
   { id:'PSS10', label:'Stress', desc:'Understand how unpredictable or overloaded life has felt during the last month.', meta:'10 questions · 3 min' },
@@ -329,7 +314,7 @@ $('#ci-stress').oninput = () => $('#v-stress').textContent = $('#ci-stress').val
 $('#ci-save').onclick = async () => {
   await api('/api/checkin', { method: 'POST', body: JSON.stringify({
     stress: +$('#ci-stress').value, sleep_hours: +$('#ci-sleep').value, mood: $('#ci-mood').value,
-    physical_symptoms: $('#ci-sym').checked, feeling_supported: +$('#ci-sup').value, anonymous: $('#ci-anon').checked
+    physical_symptoms: $('#ci-sym').checked, feeling_supported: +$('#ci-sup').value
   })});
   $('#ci-msg').textContent = '✓ Check-in saved. Thank you for taking care of yourself.';
   $('#ci-msg').classList.remove('hidden');
@@ -339,70 +324,55 @@ $('#ci-save').onclick = async () => {
 /* ==== welfare & commander (part 4) ==== */
 async function loadCommander() {
   const j = await api('/api/dashboard/unit');
+  const labels={overtime_hours:'Overtime hours',deployments:'Deployments',leave_denials:'Leave denials',incidents:'Incident exposures',transfers:'Transfers',training_days:'Training days'};
+  $('#cmd-totals').innerHTML=Object.entries(j.totals).map(([k,v])=>`<div><span>${labels[k]}</span><b>${v}</b><small>last 90 days</small></div>`).join('');
+  $('#cmd-actions').innerHTML=j.actions.length?j.actions.map(a=>`<article class="action-row"><span>${esc(a.domain)}</span><div><b>${esc(a.action)}</b><p>${esc(a.unit)} · ${esc(a.evidence)}</p></div></article>`).join(''):'<p class="muted">No priority organizational actions generated from current records.</p>';
   $('#unit-table').innerHTML = `
-    <tr><th>Unit</th><th>Region</th><th>Strength</th><th>Low</th><th>Watch</th><th>Elevated</th><th>Critical</th><th>Avg stress (14d)</th></tr>
+    <tr><th>Unit</th><th>Strength</th><th>Overtime</th><th>Deployments</th><th>Leave denied</th><th>Incidents</th><th>Pulse stress</th><th>Pulse sleep</th></tr>
     ${j.units.map(u => `
       <tr>
-        <td><b>${u.unit}</b></td><td>${u.region}</td><td>${u.strength}</td>
-        <td class="bcell b-Low">${u.bands.Low}</td>
-        <td class="bcell ${u.bands.Watch === null ? 'sup' : 'b-Watch'}">${u.bands.Watch === null ? '·suppressed·' : u.bands.Watch}</td>
-        <td class="bcell ${u.bands.Elevated === null ? 'sup' : 'b-Elevated'}">${u.bands.Elevated === null ? '·suppressed·' : u.bands.Elevated}</td>
-        <td class="bcell ${u.bands.Critical === null ? 'sup' : 'b-Critical'}">${u.bands.Critical === null ? '·suppressed·' : u.bands.Critical}</td>
-        <td>${u.avgStress ?? '—'}/10</td>
+        <td><b>${esc(u.unit)}</b><small>${esc(u.region)}</small></td><td>${u.strength}</td><td>${u.workload.overtime_hours}h</td>
+        <td>${u.workload.deployments}</td><td>${u.workload.leave_denials}</td><td>${u.workload.incidents}</td>
+        <td>${u.pulse.avg_stress===null?'<span class="sup">suppressed</span>':u.pulse.avg_stress+'/10'}</td>
+        <td>${u.pulse.avg_sleep===null?'<span class="sup">suppressed</span>':u.pulse.avg_sleep+'h'}</td>
       </tr>`).join('')}`;
   drawTrend($('#trend-chart'), j.trend);
-  renderAudit();
 }
 function drawTrend(cv, trend) {
   const ctx = cv.getContext('2d');
   ctx.clearRect(0, 0, cv.width, cv.height);
   ctx.fillStyle = themeCol('--muted'); ctx.font = '12px Segoe UI';
-  if (trend.length < 2) { ctx.fillText('Risk trend builds as the engine runs daily — press Recalculate to store today\'s snapshot.', 10, 60); return; }
+  if (trend.length < 2) { ctx.fillText('Support-priority trend builds as the model records daily snapshots.', 10, 60); return; }
   const padL = 40, W = cv.width - padL - 12, H = cv.height - 44;
-  const maxS = 100;
+  const maxS = Math.max(10, ...trend.map(t => Number(t.flagged)||0));
   const X = i => padL + (i / (trend.length - 1)) * W;
   const Y = v => 20 + H * (1 - v / maxS);
   ctx.strokeStyle = themeCol('--line');
-  [0, 25, 50, 75, 100].forEach(g => { ctx.beginPath(); ctx.moveTo(padL, Y(g)); ctx.lineTo(padL + W, Y(g)); ctx.stroke(); ctx.fillText(g, 12, Y(g)); });
+  [0,.25,.5,.75,1].map(x=>Math.round(x*maxS)).forEach(g => { ctx.beginPath(); ctx.moveTo(padL, Y(g)); ctx.lineTo(padL + W, Y(g)); ctx.stroke(); ctx.fillText(g, 12, Y(g)); });
   ctx.strokeStyle = '#e74c3c'; ctx.lineWidth = 2; ctx.beginPath();
   trend.forEach((t, i) => { i ? ctx.lineTo(X(i), Y(t.flagged)) : ctx.moveTo(X(i), Y(t.flagged)); });
   ctx.stroke();
   ctx.fillStyle = '#e74c3c'; ctx.font = '11px Segoe UI';
-  ctx.fillText('flagged personnel', padL + 6, Y(Math.max(...trend.map(t => t.flagged))) - 6);
-}
-async function renderAudit() {
-  const j = await api('/api/audit');
-  $('#audit-log').innerHTML = j.audit.map(a => `
-    <div class="access-item">${a.at.slice(0, 16).replace('T', ' ')} — <b>${a.actor}</b> (${a.role})
-    ${a.action.replace(/_/g, ' ')} ${a.target ? `→ <b>${a.target}</b>` : ''} ${a.justification ? `<span class="muted">“${a.justification}”</span>` : ''}</div>`).join('')
-    || '<p class="muted">No access events yet.</p>';
+  ctx.fillText('elevated support priority', padL + 6, Y(Math.max(...trend.map(t => t.flagged))) - 6);
 }
 $('#recalc').onclick = async () => {
   const j = await api('/api/recalculate', { method: 'POST' });
   toast(`Engine run: ${j.counts.Low} low · ${j.counts.Watch} watch · ${j.counts.Elevated} elevated · ${j.counts.Critical} critical`);
-  loadCommander();
+  loadWelfare();
 };
 
 async function loadWelfare() {
-  const [al, ro] = await Promise.all([api('/api/alerts'), api('/api/dashboard/roster')]);
-  $('#alerts-list').innerHTML = al.alerts.length ? al.alerts.map(a => `
-    <div class="alert-item">
-      <span class="lv b-${a.level}" style="color:${BAND_COLOR[a.level]}">${a.level}</span>
-      <span class="muted"> · ${a.created_at.slice(0, 16).replace('T', ' ')} · ${a.status}</span>
-      <div><b>${a.rank} ${a.name}</b> <span class="muted">(${a.force_id}, ${a.unit})</span></div>
-      <div class="reason">${a.reason}</div>
-      ${a.status === 'new' ? `
-        <div class="alert-actions">
-          <button class="btn small" onclick="actAlert(${a.id},'acknowledged')">Acknowledge</button>
-          <button class="btn small primary" onclick="openPerson(${a.personnel_id})">Review &amp; act</button>
-        </div>` : ''}
-    </div>`).join('') : '<p class="muted">No open alerts. Force welfare is stable.</p>';
-  $('#roster').innerHTML = ro.roster.length ? ro.roster.map(p => `
-    <div class="roster-item" onclick="openPerson(${p.id})">
-      <span class="lv" style="color:${BAND_COLOR[p.band]}">${p.band} · ${p.score}/100</span>
-      <div><b>${p.rank} ${p.name}</b> <span class="muted">${p.unit}</span></div>
-      <div class="reason muted">${p.factors.slice(0, 2).map(f => f.label).join(' · ')}</div>
-    </div>`).join('') : '<p class="muted">Nobody currently flagged. 🎉</p>';
+  const [al,ro,ov]=await Promise.all([api('/api/alerts'),api('/api/dashboard/roster'),api('/api/welfare/overview')]);
+  const open=al.alerts.filter(a=>a.status==='new'||a.status==='acknowledged');
+  $('#wf-summary').innerHTML=`<div><span>Open alerts</span><b>${open.length}</b><small>requiring triage</small></div><div><span>Critical priority</span><b>${ov.bands.Critical||0}</b><small>human review required</small></div><div><span>Active support plans</span><b>${(ov.interventions.recommended||0)+(ov.interventions.accepted||0)}</b><small>recommended or accepted</small></div><div><span>Data-review requests</span><b>${ov.corrections.length}</b><small>personnel submitted</small></div>`;
+  const renderCases=()=>{const list=$('#case-filter').value==='open'?open:al.alerts;$('#alerts-list').innerHTML=list.length?list.map(a=>`<article class="case-row"><div class="case-top"><span class="priority ${a.level.toLowerCase()}">${a.level}</span><time>${a.created_at.slice(0,10)}</time></div><h4>${esc(a.rank)} ${esc(a.name)}</h4><p>${esc(a.unit)} · ${esc(a.reason.replace(/^.*?:\s*/,''))}</p><div><button class="text-button" data-action="open-person" data-pid="${a.personnel_id}">Open support record →</button>${a.status==='new'?`<button class="text-button" data-action="alert" data-id="${a.id}" data-status="acknowledged">Mark reviewed</button>`:''}</div></article>`).join(''):'<p class="empty-state">No cases in this queue.</p>';};
+  renderCases();$('#case-filter').onchange=renderCases;
+  $('#correction-queue').innerHTML=ov.corrections.length?ov.corrections.map(c=>`<article class="request-card"><span>${esc(c.category)} · ${esc(c.status)}</span><h4>${esc(c.rank)} ${esc(c.name)}</h4><p>${esc(c.message)}</p>${c.status==='submitted'?`<button class="text-button" data-action="correction" data-status="reviewing" data-id="${c.id}" data-pid="${c.personnel_id}">Start review →</button>`:`<button class="text-button" data-action="correction" data-status="resolved" data-id="${c.id}" data-pid="${c.personnel_id}">Resolve with note →</button>`}</article>`).join(''):'<p class="empty-state">No pending requests.</p>';
+  $('#roster').innerHTML=ro.roster.length?`<div class="roster-head"><span>Person</span><span>Unit</span><span>Priority</span><span>Contributing evidence</span><span></span></div>`+ro.roster.map(p=>`<button class="roster-line" data-action="open-person" data-pid="${p.id}"><span><b>${esc(p.rank)} ${esc(p.name)}</b><small>${esc(p.force_id)}</small></span><span>${esc(p.unit)}</span><span class="priority ${p.band.toLowerCase()}">${p.band}</span><span>${p.factors.slice(0,2).map(f=>esc(f.label)).join(' · ')}</span><i>→</i></button>`).join(''):'<p class="empty-state">No priority cases right now.</p>';
+}
+async function reviewCorrection(id,pid,status){
+  const note=await askNote({title:status==='resolved'?'Resolve data-review request':'Start data review',help:status==='resolved'?'Record what was checked and the outcome.':'Add an initial review note (optional).',confirm:status==='resolved'?'Resolve request':'Start review',required:status==='resolved'});
+  if(note===null)return;await api('/api/data-corrections/'+id,{method:'POST',body:JSON.stringify({status,resolution_note:note})});toast(status==='resolved'?'Request resolved':'Request marked for review');loadWelfare();
 }
 async function actAlert(id, status) {
   await api('/api/alerts/' + id, { method: 'POST', body: JSON.stringify({ status }) });
@@ -419,15 +389,15 @@ async function openPerson(pid) {
   $('#person-detail').innerHTML = `
     <div class="card wide">
       <div class="row-between">
-        <h3>${p.rank} ${p.name} <span class="muted">(${p.force_id} · ${p.unit} · ${p.years_service} yrs service · ${p.family_status})</span></h3>
-        <span class="pill" style="color:${BAND_COLOR[r.band]};border-color:${BAND_COLOR[r.band]}">${r.band} risk · ${r.score}/100</span>
+        <h3>${esc(p.rank)} ${esc(p.name)} <span class="muted">(${esc(p.force_id)} · ${esc(p.unit)} · ${p.years_service} yrs service · ${esc(p.family_status)})</span></h3>
+        <span class="pill" style="color:${BAND_COLOR[r.band]};border-color:${BAND_COLOR[r.band]}">${r.band} support priority</span>
       </div>
       <div class="factors">
         ${r.factors.length ? r.factors.map(f => `
-          <div class="factor"><span style="min-width:260px">${f.label}</span>
+          <div class="factor"><span style="min-width:260px">${esc(f.label)}</span>
             <div class="bar"><i style="width:${Math.round((f.points / f.max) * 100)}%"></i></div>
-            <span class="pts">${f.points}/${f.max}</span>
-            <span class="muted" style="font-size:12.5px">${f.detail}</span></div>`).join('')
+            <span class="pts">${f.source}</span>
+            <span class="muted" style="font-size:12.5px">${esc(f.detail)}</span></div>`).join('')
         : '<p class="muted">No risk factors currently active.</p>'}
       </div>
       <h3 style="margin-top:16px">Recommended welfare interventions</h3>
@@ -435,12 +405,12 @@ async function openPerson(pid) {
     </div>
     <div class="cols">
       <div class="card"><h3>HR event timeline (recent)</h3>
-        ${j.hr.map(h => `<div class="tl-item"><span class="d">${h.date}</span><span>${h.type.replace(/_/g, ' ')}${h.value ? ` · ${h.value}` : ''}${h.note ? ` <span class="muted">— ${h.note}</span>` : ''}</span></div>`).join('') || '<p class="muted">None</p>'}
+        ${j.hr.map(h => `<div class="tl-item"><span class="d">${esc(h.date)}</span><span>${esc(h.type.replace(/_/g, ' '))}${h.value ? ` · ${esc(h.value)}` : ''}${h.note ? ` <span class="muted">— ${esc(h.note)}</span>` : ''}</span></div>`).join('') || '<p class="muted">None</p>'}
       </div>
       <div class="card"><h3>Wellness check-in trend</h3>
         <canvas id="p-chart" width="520" height="180"></canvas>
         <h3 style="margin-top:14px">Risk history</h3>
-        ${j.history.map(h => `<div class="tl-item"><span class="d">${h.date}</span><span class="bcell b-${h.band}" style="color:${BAND_COLOR[h.band]}">${h.score} · ${h.band}</span></div>`).join('')}
+         ${j.history.map(h => `<div class="tl-item"><span class="d">${h.date}</span><span class="bcell b-${h.band}" style="color:${BAND_COLOR[h.band]}">${h.band} support priority</span></div>`).join('')}
       </div>
     </div>
     <div class="card wide"><h3>Interventions on record</h3><div id="ivs"></div></div>`;
@@ -448,11 +418,11 @@ async function openPerson(pid) {
   renderRecs(r.factors, pid);
   $('#ivs').innerHTML = j.interventions.map(iv => `
     <div class="int-row">
-      <span><b>${iv.type.replace(/_/g, ' ')}</b> — ${iv.reason} <span class="muted">(${iv.status})</span></span>
-      ${iv.status === 'recommended' ? `<span>
-        <button class="btn small" onclick="setIv(${iv.id},'accepted')">Accepted</button>
-        <button class="btn small primary" onclick="setIv(${iv.id},'completed')">Completed</button>
-        <button class="btn small ghost" onclick="setIv(${iv.id},'declined')">Declined</button></span>` : ''}
+      <span><b>${esc(iv.type.replace(/_/g, ' '))}</b> — ${esc(iv.reason)} <span class="muted">(${esc(iv.status)})</span></span>
+      ${['recommended','accepted'].includes(iv.status) ? `<span>
+        ${iv.status==='recommended'?`<button class="btn small" data-action="intervention" data-id="${iv.id}" data-status="accepted" data-pid="${pid}">Mark accepted</button>`:''}
+        <button class="btn small primary" data-action="intervention" data-id="${iv.id}" data-status="completed" data-pid="${pid}">Complete with note</button>
+        <button class="btn small ghost" data-action="intervention" data-id="${iv.id}" data-status="declined" data-pid="${pid}">Declined</button></span>` : ''}
     </div>`).join('') || '<p class="muted">No interventions recorded yet.</p>';
 }
 function renderRecs(factors, pid) {
@@ -465,8 +435,6 @@ function renderRecs(factors, pid) {
     deployment: ['rest_rotation', 'Prolonged deployment — schedule rest rotation'],
     family_sep: ['family_leave', 'Extended family separation — prioritize family travel leave'],
     leave_denials: ['family_leave', 'Multiple denied leave requests — review leave priority'],
-    engagement: ['peer_support', 'Low engagement — assign peer-support buddy'],
-    disciplinary: ['peer_support', 'Welfare touch-base alongside any process'],
     transfers: ['peer_support', 'Instability from transfers — peer-support network']
   };
   const seen = new Set(), recs = [];
@@ -478,7 +446,7 @@ function renderRecs(factors, pid) {
   $('#recs').innerHTML = recs.slice(0, 4).map((r, i) => `
     <div class="int-row">
       <span>✅ <b>${r.type.replace(/_/g, ' ')}</b> — ${r.reason}</span>
-      <button class="btn small primary" onclick="applyRecs(${pid},${i})">Recommend this</button>
+      <button class="btn small primary" data-action="recommend" data-pid="${pid}" data-index="${i}">Recommend this</button>
     </div>`).join('');
   $('#recs').dataset.recs = JSON.stringify(recs.slice(0, 4));
 }
@@ -491,10 +459,24 @@ async function applyRecs(pid, idx) {
   toast('Intervention recommended');
   openPerson(pid);
 }
-async function setIv(id, status) {
-  await api('/api/interventions/' + id, { method: 'POST', body: JSON.stringify({ status }) });
+async function setIv(id, status, pid) {
+  const outcome_note=status==='completed'?await askNote({title:'Complete support plan',help:'Record the action taken and any agreed follow-up. Avoid unnecessary clinical detail.',confirm:'Mark complete',required:true}):'';
+  if(status==='completed'&&outcome_note===null)return;
+  await api('/api/interventions/' + id, { method: 'POST', body: JSON.stringify({ status, outcome_note }) });
   toast('Intervention ' + status);
+  if(pid) openPerson(pid);
 }
+
+// CSP-safe delegated actions for content rendered after API responses.
+document.addEventListener('click', e => {
+  const b=e.target.closest('[data-action]'); if(!b)return;
+  const pid=Number(b.dataset.pid), id=Number(b.dataset.id);
+  if(b.dataset.action==='open-person') openPerson(pid);
+  if(b.dataset.action==='alert') actAlert(id,b.dataset.status);
+  if(b.dataset.action==='correction') reviewCorrection(id,pid,b.dataset.status);
+  if(b.dataset.action==='recommend') applyRecs(pid,Number(b.dataset.index));
+  if(b.dataset.action==='intervention') setIv(id,b.dataset.status,pid);
+});
 
 /* ==== private journal (merged from seven50) ==== */
 const J_GOAL = 750, J_BLUE = 400;

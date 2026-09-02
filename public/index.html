@@ -11,34 +11,50 @@
 </head>
 <body>
 
-<button id="theme-toggle" aria-label="Toggle dark / light mode" title="Pull the cord!">
-  <span class="cord-swing"><span class="cord-line"></span><span class="cord-knob"></span></span>
-  <span class="cord-label">pull the<br>cord!</span>
-</button>
+<button id="theme-toggle" aria-label="Switch color theme" title="Switch color theme"><span class="theme-icon">◐</span></button>
 
-<!-- LOGIN -->
-<div id="login-view" class="login-wrap">
-  <div class="login-card">
-    <div class="logo">🛡️ SENTINEL</div>
-    <p class="tagline">Predictive Personnel Stress &amp; Welfare Monitoring System<br>
-    <span class="muted">SIH 26186 · Ministry of Home Affairs / CRPF</span></p>
-    <input id="li-user" placeholder="Username" autocomplete="username">
-    <input id="li-pass" type="password" placeholder="Password" autocomplete="current-password">
-    <button id="li-btn" class="btn primary">Sign in</button>
-    <p id="li-err" class="error hidden"></p>
-    <div class="demo-creds">
-      <b>Demo accounts</b> (password: <code>demo123</code>)<br>
-      <button class="linkish" data-quick="welfare">welfare — Welfare Officer</button> ·
-      <button class="linkish" data-quick="commander">commander — Unit Commander</button> ·
-      <button class="linkish" data-quick="sepoy.demo">sepoy.demo — Personnel</button>
-    </div>
-  </div>
+<!-- INSTITUTIONAL ACCESS -->
+<div id="login-view" class="public-shell">
+  <header class="public-nav"><div class="brand-mark"><span>S</span><div><b>SENTINEL</b><small>Personnel welfare system</small></div></div>
+    <span class="prototype-tag">PS 26186 · Working prototype</span></header>
+  <main class="access-layout">
+    <section class="access-intro">
+      <p class="eyebrow">Privacy-first early support</p>
+      <h1>See work pressure earlier.<br><span>Respond with care.</span></h1>
+      <p class="lead">SENTINEL brings organizational workload records and voluntary wellbeing signals together so uniformed forces can act before strain becomes a crisis—without turning private reflection into surveillance.</p>
+      <div class="principles">
+        <div><b>Work conditions first</b><span>Duty load, deployment, leave and recovery—not personality labels.</span></div>
+        <div><b>Access by responsibility</b><span>Personnel, welfare teams and commanders see different information.</span></div>
+        <div><b>Human decisions</b><span>Support priority is explainable and never a diagnosis or disciplinary score.</span></div>
+      </div>
+    </section>
+    <section class="access-panel">
+      <div id="portal-choice">
+        <p class="eyebrow">Secure access</p><h2>Choose your workspace</h2>
+        <p class="muted">Your role determines what data and actions are available.</p>
+        <button class="portal-row" data-portal="personnel"><span class="portal-icon">P</span><span><b>Personnel</b><small>Check in, review your workload data, assessments and private journal</small></span><i>→</i></button>
+        <button class="portal-row" data-portal="welfare"><span class="portal-icon">W</span><span><b>Welfare Officer</b><small>Review support cases, coordinate follow-up and record outcomes</small></span><i>→</i></button>
+        <button class="portal-row" data-portal="commander"><span class="portal-icon">C</span><span><b>Commander</b><small>View anonymized unit workload patterns and balancing actions</small></span><i>→</i></button>
+      </div>
+      <div id="signin-form" class="hidden">
+        <button id="portal-back" class="text-button">← Change workspace</button>
+        <p id="portal-label" class="eyebrow"></p><h2>Sign in to SENTINEL</h2>
+        <label for="li-user">Service ID / username</label><input id="li-user" autocomplete="username">
+        <label for="li-pass">Password</label><input id="li-pass" type="password" autocomplete="current-password">
+        <button id="li-btn" class="btn primary">Continue securely</button>
+        <p id="li-err" class="error hidden"></p>
+        <p class="access-help">Production access would use force identity/SSO and MFA. This prototype uses local role-based accounts.</p>
+        <details class="demo-access"><summary>Prototype evaluator access</summary><div id="demo-options"></div><p>Password: <code>demo123</code></p></details>
+      </div>
+    </section>
+  </main>
+  <footer class="public-footer"><span>Ministry of Home Affairs / CRPF challenge prototype</span><span>Confidential by design · Journal excluded from organizational analytics</span></footer>
 </div>
 
 <!-- APP -->
 <div id="app-view" class="hidden">
   <header>
-    <div class="logo small">🛡️ SENTINEL</div>
+    <div class="logo small"><span class="app-monogram">S</span> SENTINEL</div>
     <nav id="nav"></nav>
     <div class="hdr-right">
       <span id="who" class="muted"></span>
@@ -48,11 +64,13 @@
   <div id="banner" class="banner hidden"></div>
 
   <main id="view-dashboard" class="view hidden">
+    <div class="view-heading"><div><p class="eyebrow">Personal workspace</p><h1>Your wellbeing, in context</h1><p>Compare how work is recorded with how you actually feel. You can review and challenge the records used.</p></div><span class="scope-note">Visible to you</span></div>
     <div id="my-tiles" class="tiles"></div>
+    <section id="work-feeling" class="context-panel"></section>
     <div class="cols">
       <section class="card">
         <h3>Daily wellness check-in</h3>
-        <p class="muted">Your honest answers drive welfare support. You may submit anonymously.</p>
+        <p class="muted">Optional and confidential. Your answers can inform welfare support, but not disciplinary decisions.</p>
         <label>Stress level today: <b id="v-stress">5</b>/10</label>
         <input type="range" id="ci-stress" min="1" max="10" value="5">
         <label>Sleep last night (hours)</label>
@@ -65,7 +83,6 @@
         <label class="chk"><input type="checkbox" id="ci-sym"> Physical symptoms (headache, fatigue, body pain)</label>
         <label>Feeling supported by the organisation (1–5)</label>
         <input type="number" id="ci-sup" min="1" max="5" value="3">
-        <label class="chk"><input type="checkbox" id="ci-anon"> Submit anonymously (aggregate statistics only)</label>
         <button id="ci-save" class="btn primary">Submit check-in</button>
         <p id="ci-msg" class="okmsg hidden"></p>
       </section>
@@ -78,6 +95,13 @@
           📞 <b>Need to talk now?</b> Mental Health Rehabilitation Helpline: <b>1800-599-0019 (KIRAN)</b>
         </div>
       </section>
+    </div>
+    <div class="cols">
+      <section class="card"><div class="section-head"><div><h3>Records used from HR systems</h3><p class="muted">Recent non-disciplinary organizational records.</p></div></div><div id="my-work-records"></div></section>
+      <section class="card"><h3>Something recorded incorrectly?</h3><p class="muted">Request a review. Your original record is not silently changed; the request is tracked.</p>
+        <select id="correction-category"><option value="workload">Duty workload</option><option value="leave">Leave record</option><option value="deployment">Deployment record</option><option value="profile">Profile information</option><option value="other">Other</option></select>
+        <textarea id="correction-message" class="plain-textarea" placeholder="Describe what appears incorrect and what should be checked…"></textarea>
+        <button id="correction-submit" class="btn">Submit review request</button><div id="correction-list"></div></section>
     </div>
   </main>
 
@@ -213,35 +237,20 @@
   </main>
 
   <main id="view-commander" class="view hidden">
-    <div class="card wide">
-      <div class="row-between">
-        <h3>Unit welfare heatmap <span class="pill">aggregated · k-anonymized</span></h3>
-        <button id="recalc" class="btn">↻ Recalculate risk engine</button>
-      </div>
-      <p class="muted">Privacy: commanders see unit-level aggregates only. Cells with fewer than 5 personnel are suppressed. Individual identities are visible solely to authorized Welfare Officers.</p>
-      <table id="unit-table" class="tbl"></table>
-    </div>
-    <div class="card wide">
-      <h3>Force-wide 30-day trend</h3>
-      <canvas id="trend-chart" width="900" height="200"></canvas>
-    </div>
-    <div class="card wide">
-      <h3>Access transparency log</h3>
-      <div id="audit-log"></div>
-    </div>
+    <div class="view-heading"><div><p class="eyebrow">Command workspace</p><h1>Operational conditions</h1><p>Use unit-level evidence to reduce preventable strain. No individual wellness records are available here.</p></div><span class="scope-note">Aggregated · minimum group 5</span></div>
+    <div id="cmd-totals" class="metric-strip"></div>
+    <div class="cols cmd-grid"><section class="card"><h3>Priority organizational actions</h3><div id="cmd-actions"></div></section>
+      <section class="card"><h3>What this view can and cannot show</h3><div class="boundary-list"><p><b>Shows</b> unit workload, leave friction, deployment, incidents and sufficiently large pulse groups.</p><p><b>Does not show</b> names, journals, assessment answers or personal case notes.</p><p><b>Use for</b> staffing, roster, leave, recovery and resource decisions—not diagnosis.</p></div></section></div>
+    <section class="card wide"><div class="section-head"><div><h3>Unit pressure overview</h3><p class="muted">90-day organizational records; voluntary pulse averages cover 14 days.</p></div></div><div class="table-wrap"><table id="unit-table" class="tbl"></table></div></section>
+    <section class="card wide"><h3>Support-priority trend</h3><canvas id="trend-chart" width="900" height="200"></canvas></section>
   </main>
 
   <main id="view-welfare" class="view hidden">
-    <div class="cols">
-      <section class="card">
-        <h3>🔔 Automated alerts</h3>
-        <div id="alerts-list" class="alerts"></div>
-      </section>
-      <section class="card">
-        <h3>Flagged personnel roster</h3>
-        <div id="roster" class="roster"></div>
-      </section>
-    </div>
+    <div class="view-heading"><div><p class="eyebrow">Welfare operations</p><h1>Support casework</h1><p>Prioritize review, understand contributing evidence and track humane follow-up.</p></div><button id="recalc" class="btn">Refresh support model</button></div>
+    <div id="wf-summary" class="metric-strip"></div>
+    <div class="case-layout"><section class="card"><div class="section-head"><div><h3>Cases needing attention</h3><p class="muted">Ordered by support urgency and recency.</p></div><select id="case-filter"><option value="open">Open alerts</option><option value="all">All priority cases</option></select></div><div id="alerts-list" class="case-list"></div></section>
+      <section class="card"><h3>Personnel data-review requests</h3><p class="muted">Requests to verify an HR or profile record.</p><div id="correction-queue"></div></section></div>
+    <section class="card wide"><div class="section-head"><div><h3>Support-priority roster</h3><p class="muted">A review queue—not a diagnosis or misconduct list.</p></div></div><div id="roster" class="roster-table"></div></section>
   </main>
 
   <main id="view-person" class="view hidden">
@@ -251,6 +260,12 @@
 </div>
 
 <div id="toast" class="toast hidden"></div>
+<dialog id="action-dialog" class="action-dialog">
+  <form method="dialog"><h3 id="dialog-title"></h3><p id="dialog-help" class="muted"></p>
+    <textarea id="dialog-note" class="plain-textarea"></textarea>
+    <div class="dialog-actions"><button value="cancel" class="btn ghost">Cancel</button><button id="dialog-confirm" value="default" class="btn primary">Confirm</button></div>
+  </form>
+</dialog>
 <script src="app.js"></script>
 </body>
 </html>
