@@ -1,0 +1,13 @@
+{
+  "name": "sentinel",
+  "version": "1.0.0",
+  "description": "AI-Based Predictive Personnel Stress and Welfare Monitoring System for Uniformed Forces (SIH 26186)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "seed": "node lib/seed.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SENTINEL — Personnel Welfare Monitoring</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login-view" class="login-wrap">
+  <div class="login-card">
+    <div class="logo">🛡️ SENTINEL</div>
+    <p class="tagline">Predictive Personnel Stress &amp; Welfare Monitoring System<br>
+    <span class="muted">SIH 26186 · Ministry of Home Affairs / CRPF</span></p>
+    <input id="li-user" placeholder="Username" autocomplete="username">
+    <input id="li-pass" type="password" placeholder="Password" autocomplete="current-password">
+    <button id="li-btn" class="btn primary">Sign in</button>
+    <p id="li-err" class="error hidden"></p>
+    <div class="demo-creds">
+      <b>Demo accounts</b> (password: <code>demo123</code>)<br>
+      <button class="linkish" data-quick="welfare">welfare — Welfare Officer</button> ·
+      <button class="linkish" data-quick="commander">commander — Unit Commander</button> ·
+      <button class="linkish" data-quick="sepoy.demo">sepoy.demo — Personnel</button>
+    </div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app-view" class="hidden">
+  <header>
+    <div class="logo small">🛡️ SENTINEL</div>
+    <nav id="nav"></nav>
+    <div class="hdr-right">
+      <span id="who" class="muted"></span>
+      <button id="logout" class="btn ghost">Logout</button>
+    </div>
+  </header>
+  <div id="banner" class="banner hidden"></div>
+
+  <main id="view-personnel" class="view hidden">
+    <div class="cols">
+      <section class="card">
+        <h3>Daily wellness check-in</h3>
+        <p class="muted">Your honest answers drive welfare support. You may submit anonymously.</p>
+        <label>Stress level today: <b id="v-stress">5</b>/10</label>
+        <input type="range" id="ci-stress" min="1" max="10" value="5">
+        <label>Sleep last night (hours)</label>
+        <input type="number" id="ci-sleep" min="0" max="14" step="0.5" value="7">
+        <label>Mood</label>
+        <select id="ci-mood">
+          <option>good</option><option>okay</option><option>tired</option>
+          <option>stressed</option><option>low</option><option>anxious</option><option>motivated</option>
+        </select>
+        <label class="chk"><input type="checkbox" id="ci-sym"> Physical symptoms (headache, fatigue, body pain)</label>
+        <label>Feeling supported by the organisation (1–5)</label>
+        <input type="number" id="ci-sup" min="1" max="5" value="3">
+        <label class="chk"><input type="checkbox" id="ci-anon"> Submit anonymously (aggregate statistics only)</label>
+        <button id="ci-save" class="btn primary">Submit check-in</button>
+        <p id="ci-msg" class="okmsg hidden"></p>
+      </section>
+      <section class="card">
+        <h3>My wellness summary</h3>
+        <div id="my-risk"></div>
+        <canvas id="my-chart" width="560" height="160"></canvas>
+        <h3>Transparency — who viewed my record</h3>
+        <div id="my-access" class="access-log"></div>
+        <div class="helpline">
+          📞 <b>Need to talk now?</b> Mental Health Rehabilitation Helpline: <b>1800-599-0019 (KIRAN)</b>
+        </div>
+      </section>
+    </div>
+    <section class="card">
+      <h3>Standardized wellness assessment (PSS-10 style)</h3>
+      <p class="muted">10 questions · last month · answers rated 0 (never) – 4 (very often)</p>
+      <div id="pss"></div>
+      <button id="pss-save" class="btn primary">Submit assessment</button>
+      <p id="pss-msg" class="okmsg hidden"></p>
+    </section>
+  </main>
+
+  <main id="view-journal" class="view hidden">
+    <div class="card wide">
+      <div class="row-between">
+        <h3>📝 Private reflective journal <span class="pill">visible only to you</span></h3>
+        <span id="jr-streak" class="muted"></span>
+      </div>
+      <p class="muted">Daily expressive writing is a proven stress-management practice. Nothing you write here is
+      shared with commanders, welfare officers, or the risk engine — it never leaves your account.</p>
+      <div class="jr-progress"><div id="jr-bar"></div></div>
+      <p id="jr-count" class="muted" style="margin:6px 0">0 / 750 words</p>
+      <textarea id="jr-editor" placeholder="Write about your day, your thoughts, anything on your mind…"></textarea>
+      <div class="row-between" style="margin-top:8px">
+        <span id="jr-meta" class="muted"></span>
+        <span id="jr-save" class="muted">—</span>
+      </div>
+    </div>
+    <div class="card wide">
+      <h3>Last 14 days</h3>
+      <div id="jr-days" class="jr-days"></div>
+      <p id="jr-totals" class="muted" style="margin-top:10px"></p>
+    </div>
+  </main>
+
+  <main id="view-commander" class="view hidden">
+    <div class="card wide">
+      <div class="row-between">
+        <h3>Unit welfare heatmap <span class="pill">aggregated · k-anonymized</span></h3>
+        <button id="recalc" class="btn">↻ Recalculate risk engine</button>
+      </div>
+      <p class="muted">Privacy: commanders see unit-level aggregates only. Cells with fewer than 5 personnel are suppressed. Individual identities are visible solely to authorized Welfare Officers.</p>
+      <table id="unit-table" class="tbl"></table>
+    </div>
+    <div class="card wide">
+      <h3>Force-wide 30-day trend</h3>
+      <canvas id="trend-chart" width="900" height="200"></canvas>
+    </div>
+    <div class="card wide">
+      <h3>Access transparency log</h3>
+      <div id="audit-log"></div>
+    </div>
+  </main>
+
+  <main id="view-welfare" class="view hidden">
+    <div class="cols">
+      <section class="card">
+        <h3>🔔 Automated alerts</h3>
+        <div id="alerts-list" class="alerts"></div>
+      </section>
+      <section class="card">
+        <h3>Flagged personnel roster</h3>
+        <div id="roster" class="roster"></div>
+      </section>
+    </div>
+  </main>
+
+  <main id="view-person" class="view hidden">
+    <button id="back-welfare" class="btn ghost">← Back to roster</button>
+    <div id="person-detail"></div>
+  </main>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<script src="app.js"></script>
+</body>
+</html>

@@ -40,3 +40,9 @@ desktop.ini
 logs/
 *.log
 tmp/
+
+# ---- Private data (never commit) ----
+data/
+*.db
+*.db-wal
+*.db-shm
