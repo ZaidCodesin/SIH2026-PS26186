@@ -109,6 +109,14 @@
         </select>
         <span id="jr-mic-status" class="muted"></span>
       </div>
+      <div id="jr-draft-wrap" class="jr-draft-wrap hidden">
+        <label for="jr-draft">⚠ Heard this, but not fully sure — check &amp; fix before it enters your journal:</label>
+        <textarea id="jr-draft" rows="2" placeholder="what the mic heard will appear here…"></textarea>
+        <div class="jr-draft-actions">
+          <button id="jr-draft-ok" class="mic-btn ok">✓ Add to journal</button>
+          <button id="jr-draft-no" class="mic-btn no">✕ Discard</button>
+        </div>
+      </div>
       <div class="row-between" style="margin-top:8px">
         <span id="jr-meta" class="muted"></span>
         <span id="jr-save" class="muted">—</span>

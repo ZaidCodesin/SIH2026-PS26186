@@ -366,7 +366,7 @@ if (!SR) {
     let interim = '';
     for (let i = e.resultIndex; i < e.results.length; i++) {
       const t = e.results[i][0].transcript;
-      if (e.results[i].isFinal) jrAppendSpoken(t);
+      if (e.results[i].isFinal) jrRouteHeard(t, e.results[i][0].confidence);
       else interim += t;
     }
     $('#jr-mic-status').textContent = jrListening ? (interim ? '… ' + interim : 'listening…') : '';
@@ -382,15 +382,67 @@ if (!SR) {
   };
 }
 
+/* smart ASR corrector: fixes the most common speech-to-text mistakes */
+const ASR_FIXES = [
+  [/\b(see|sea|csi|si)\s+(are|our|ar|r)\s+(pf|ef|phe)\b/gi, 'CRPF'],
+  [/\bc\.?\s*r\.?\s*p\.?\s*f\.?(?=\s|$|[,.!?])/gi, 'CRPF'],
+  [/\bha\s?filda{1,2}r\b/gi, 'Havildar'],
+  [/\bna(y|i|ee)k\b/gi, 'Naik'],
+  [/\bsub(a|e)dar\b/gi, 'Subedar'],
+  [/\bseven\s?fifty\b/gi, '750'],
+  [/\bseven\s?hundred\s?(and\s?)?fifty\b/gi, '750']
+];
+function voiceFix(t) {
+  let s = ' ' + (t || '').trim() + ' ';
+  s = s.replace(/\b(\w+)(\s+\1\b)+/gi, '$1');   // "the the" -> "the"
+  s = s.replace(/\bi\b/g, 'I');                  // standalone i -> I
+  for (const [re, rep] of ASR_FIXES) s = s.replace(re, rep);
+  s = s.replace(/\s+([,.!?;:])/g, '$1');         // no space before punctuation
+  s = s.replace(/([,.!?;:])(?=[^\s\d])/g, '$1 ');// space after punctuation
+  s = s.replace(/\s{2,}/g, ' ').trim();
+  s = s.charAt(0).toUpperCase() + s.slice(1);
+  if (s && !/[.!?…]$/.test(s)) s += '.';
+  return s;
+}
+
+/* confidence routing: trustworthy phrases flow in, doubtful ones wait for review */
+const CONF_AUTO = 0.75;
+function jrRouteHeard(text, conf) {
+  const c = (typeof conf === 'number' && conf > 0) ? conf : 0.9; // engines without confidence -> trust
+  const fixed = voiceFix(text);
+  if (c >= CONF_AUTO) {
+    jrAppendSpoken(fixed);
+    $('#jr-mic-status').textContent = '✓ added: ' + (fixed.length > 60 ? fixed.slice(0, 57) + '…' : fixed);
+  } else {
+    const d = $('#jr-draft');
+    d.value = (d.value ? d.value + ' ' : '') + fixed;
+    $('#jr-draft-wrap').classList.remove('hidden');
+    $('#jr-mic-status').textContent = '⚠ low confidence — check the review box below';
+  }
+}
+
 function jrAppendSpoken(text) {
   const clean = (text || '').trim();
   if (!clean) return;
   const ed = $('#jr-editor');
   const sep = ed.value && !/\s$/.test(ed.value) ? ' ' : '';
-  ed.value += sep + clean.charAt(0).toUpperCase() + clean.slice(1) + '. ';
+  ed.value += sep + clean.charAt(0).toUpperCase() + clean.slice(1) + ' ';
   ed.dispatchEvent(new Event('input')); // reuse autosave + live counters
   ed.scrollTop = ed.scrollHeight;
 }
+
+/* review box: human verifies doubtful phrases before they touch the journal */
+$('#jr-draft-ok').addEventListener('click', () => {
+  const d = $('#jr-draft');
+  if (d.value.trim()) { jrAppendSpoken(voiceFix(d.value)); d.value = ''; }
+  $('#jr-draft-wrap').classList.add('hidden');
+  $('#jr-mic-status').textContent = '✓ reviewed text added to journal';
+});
+$('#jr-draft-no').addEventListener('click', () => {
+  $('#jr-draft').value = '';
+  $('#jr-draft-wrap').classList.add('hidden');
+  $('#jr-mic-status').textContent = 'discarded — nothing was added';
+});
 
 function jrStopMic() {
   jrListening = false;
@@ -404,6 +456,7 @@ $('#jr-mic').addEventListener('click', () => {
   if (!SR) { toast('Voice input works in Chrome, Edge, or Safari'); return; }
   if (jrListening) return jrStopMic();
   jrRec.lang = $('#jr-lang').value;
+  localStorage.setItem('sentinel-jr-lang', jrRec.lang);
   try { jrRec.start(); } catch { return; }
   jrListening = true;
   $('#jr-mic').classList.add('recording');
@@ -411,8 +464,17 @@ $('#jr-mic').addEventListener('click', () => {
   $('#jr-mic-status').textContent = 'listening… speak naturally';
 });
 $('#jr-lang').addEventListener('change', () => {
+  localStorage.setItem('sentinel-jr-lang', $('#jr-lang').value);
   if (jrListening) { jrStopMic(); setTimeout(() => $('#jr-mic').click(), 250); }
 });
+/* restore remembered language (most "wrong listening" = wrong language selected) */
+(() => {
+  const saved = localStorage.getItem('sentinel-jr-lang');
+  if (saved && [...$('#jr-lang').options].some(o => o.value === saved)) {
+    $('#jr-lang').value = saved;
+    if (saved !== 'en-IN') $('#jr-mic-status').textContent = 'language: ' + $('#jr-lang').selectedOptions[0].textContent;
+  }
+})();
 
 async function saveJournal(sync) {
   const body = { date: jrDate, content: $('#jr-editor').value,

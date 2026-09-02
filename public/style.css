@@ -104,3 +104,14 @@ canvas { max-width: 100%; }
 }
 #jr-lang { padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; font: inherit; background: var(--panel2); color: var(--ink); }
 #jr-mic-status { font-size: 13px; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jr-draft-wrap { margin-top: 10px; border: 1px solid #e67e22; background: rgba(230, 126, 34, .08);
+  border-radius: 10px; padding: 10px 14px; }
+.jr-draft-wrap label { display: block; font-size: 13px; color: #e67e22; font-weight: 600; margin-bottom: 6px; }
+#jr-draft { width: 100%; background: var(--panel2); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 8px; padding: 8px 10px; font: inherit; resize: vertical; }
+#jr-draft:focus { outline: none; border-color: #e67e22; }
+.jr-draft-actions { display: flex; gap: 8px; margin-top: 8px; }
+.mic-btn.ok { border-color: #2ecc71; color: #2ecc71; }
+.mic-btn.ok:hover { background: #2ecc71; color: #fff; }
+.mic-btn.no { border-color: var(--line); color: var(--muted); }
+.mic-btn.no:hover { border-color: #e74c3c; color: #e74c3c; }
