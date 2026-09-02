@@ -68,18 +68,75 @@ let curView = null;
   knob.addEventListener('pointerup', release);
   knob.addEventListener('pointercancel', release);
 })();
-const PSS_Q = [
-  'Been upset because of something that happened unexpectedly?',
-  'Felt unable to control the important things in your life?',
-  'Felt nervous and stressed?',
-  'Felt confident about your ability to handle your personal problems? (reverse)',
-  'Felt that things were going your way? (reverse)',
-  'Found that you could not cope with all the things that you had to do?',
-  'Been able to control irritations in your life? (reverse)',
-  'Felt that you were on top of things? (reverse)',
-  'Been angered because of things that happened that were outside of your control?',
-  'Felt difficulties were piling up so high that you could not overcome them?'
-];
+const ASSESSMENTS = {
+  WHO5: {
+    name: 'WHO-5 Well-Being Index', short: 'Wellbeing check', icon: '☀', accent: '#3ddc97',
+    period: 'Please choose the answer that best describes how you have felt over the last two weeks.',
+    questions: [
+      'I have felt cheerful and in good spirits.',
+      'I have felt calm and relaxed.',
+      'I have felt active and vigorous.',
+      'I woke up feeling fresh and rested.',
+      'My daily life has been filled with things that interest me.'
+    ],
+    options: [[5,'All of the time'],[4,'Most of the time'],[3,'More than half of the time'],[2,'Less than half of the time'],[1,'Some of the time'],[0,'At no time']],
+    source: 'World Health Organization (2024) · WHO-5 · CC BY-NC-SA 3.0',
+    sourceUrl: 'https://www.who.int/publications/m/item/WHO-UCN-MSD-MHE-2024.01'
+  },
+  PSS10: {
+    name: 'Perceived Stress Scale (PSS-10)', short: 'Stress check', icon: '◒', accent: '#60a5fa',
+    period: 'In the last month, how often have you…',
+    questions: [
+      'been upset because of something that happened unexpectedly?',
+      'felt that you were unable to control the important things in your life?',
+      'felt nervous and stressed?',
+      'felt confident about your ability to handle your personal problems?',
+      'felt that things were going your way?',
+      'found that you could not cope with all the things that you had to do?',
+      'been able to control irritations in your life?',
+      'felt that you were on top of things?',
+      'been angered because of things that were outside of your control?',
+      'felt difficulties were piling up so high that you could not overcome them?'
+    ],
+    options: [[0,'Never'],[1,'Almost never'],[2,'Sometimes'],[3,'Fairly often'],[4,'Very often']],
+    source: 'Cohen, Kamarck & Mermelstein · Perceived Stress Scale',
+    sourceUrl: 'https://www.cmu.edu/dietrich/psychology/stress-immunity-disease-lab/scales/index.html'
+  },
+  GAD7: {
+    name: 'General Anxiety Disorder (GAD-7)', short: 'Anxiety check', icon: '≈', accent: '#a78bfa',
+    period: 'Over the last two weeks, how often have you been bothered by the following problems?',
+    questions: [
+      'Feeling nervous, anxious, or on edge.',
+      'Not being able to stop or control worrying.',
+      'Worrying too much about different things.',
+      'Trouble relaxing.',
+      'Being so restless that it is hard to sit still.',
+      'Becoming easily annoyed or irritable.',
+      'Feeling afraid, as if something awful might happen.'
+    ],
+    options: [[0,'Not at all'],[1,'Several days'],[2,'More than half the days'],[3,'Nearly every day']],
+    source: 'Spitzer, Kroenke, Williams & Löwe · GAD-7 · Reproduction permitted',
+    sourceUrl: 'https://www.phqscreeners.com/select-screener'
+  },
+  PHQ9: {
+    name: 'Patient Health Questionnaire (PHQ-9)', short: 'Mood check', icon: '○', accent: '#f4b400',
+    period: 'Over the last two weeks, how often have you been bothered by the following problems?',
+    questions: [
+      'Little interest or pleasure in doing things.',
+      'Feeling down, depressed, or hopeless.',
+      'Trouble falling or staying asleep, or sleeping too much.',
+      'Feeling tired or having little energy.',
+      'Poor appetite or overeating.',
+      'Feeling bad about yourself—or that you are a failure or have let yourself or your family down.',
+      'Trouble concentrating on things, such as reading or watching television.',
+      'Moving or speaking so slowly that other people could have noticed—or being so restless that you have been moving a lot more than usual.',
+      'Thoughts that you would be better off dead, or of hurting yourself in some way.'
+    ],
+    options: [[0,'Not at all'],[1,'Several days'],[2,'More than half the days'],[3,'Nearly every day']],
+    source: 'Kroenke, Spitzer & Williams · PHQ-9 · Reproduction permitted',
+    sourceUrl: 'https://www.phqscreeners.com/select-screener'
+  }
+};
 let me = null;
 
 function toast(msg) {
@@ -175,48 +232,75 @@ async function loadPersonnel() {
     : '<p class="muted">No one has viewed your record. You are notified whenever a welfare officer does.</p>';
   lastAsmts = j.assessments || [];
 }
-let lastAsmts = [];
-
-/* ---- assessments view (CogniFit-style card grid) ---- */
-const ASMTS = [
-  { id: 'PSS10', icon: '🧠', name: 'Perceived Stress Scale', tag: 'Recommended',
-    desc: 'The standard 10-item scale for how unpredictable and overloaded life feels.',
-    meta: '10 questions · ~3 min', active: true },
-  { id: 'PHQ9', icon: '🌧️', name: 'Mood Check (PHQ-9)', tag: 'Coming soon',
-    desc: 'Widely used screening for low mood and motivation.',
-    meta: '9 questions · ~2 min', active: false },
-  { id: 'GAD7', icon: '🌊', name: 'Anxiety Check (GAD-7)', tag: 'Coming soon',
-    desc: 'Standard 7-item measure of worry and tension.',
-    meta: '7 questions · ~2 min', active: false },
-  { id: 'WHO5', icon: '🌿', name: 'Wellbeing Index (WHO-5)', tag: 'Coming soon',
-    desc: 'Positive wellbeing measure used worldwide.',
-    meta: '5 questions · ~1 min', active: false }
+let lastAsmts = [], activeAsmt = null, asmtIndex = 0, asmtAnswers = [];
+const ASMT_LIBRARY = [
+  { id:'PSS10', label:'Stress', desc:'Understand how unpredictable or overloaded life has felt during the last month.', meta:'10 questions · 3 min' },
+  { id:'GAD7', label:'Anxiety', desc:'A brief check for patterns of worry, tension, restlessness, and fear.', meta:'7 questions · 2 min' },
+  { id:'PHQ9', label:'Mood', desc:'A confidential screen for changes in mood, interest, sleep, energy, and concentration.', meta:'9 questions · 3 min' }
 ];
 async function renderAssessments() {
-  if (!lastAsmts.length) {
-    try { lastAsmts = (await api('/api/my-status')).assessments || []; } catch {}
-  }
-  const last = lastAsmts.find(a => a.type === 'PSS10');
-  $('#asmt-grid').innerHTML = ASMTS.map(a => {
-    const mine = a.id === 'PSS10' ? last : null;
-    return `
-    <div class="asmt-card ${a.active ? '' : 'soon'}">
-      <div class="asmt-top"><span class="asmt-icon">${a.icon}</span>
-        <span class="pill ${a.active ? 'pill-hot' : ''}">${a.tag}</span></div>
-      <h4>${a.name}</h4>
-      <p class="muted">${a.desc}</p>
-      <div class="asmt-meta">${a.meta}${mine ? ` · <b style="color:var(--accent)">last: ${mine.score}/100 (${mine.date})</b>` : ''}</div>
-      ${a.active
-        ? `<button class="btn primary asmt-start" data-id="${a.id}">${mine ? 'Retake' : 'Start'} assessment</button>`
-        : `<button class="btn" disabled>Coming soon</button>`}
-    </div>`;
+  try { lastAsmts = (await api('/api/my-status')).assessments || []; } catch {}
+  const who = lastAsmts.find(a => a.type === 'WHO5');
+  $('#who-last').textContent = who ? `Last completed ${who.date}` : 'A gentle place to begin';
+  $('#asmt-grid').innerHTML = ASMT_LIBRARY.map(a => {
+    const s=ASSESSMENTS[a.id], mine=lastAsmts.find(x=>x.type===a.id);
+    return `<article class="asmt-card" style="--asmt-accent:${s.accent}">
+      <div class="asmt-card-head"><span class="asmt-symbol">${s.icon}</span><span>${a.label}</span></div>
+      <h3>${s.name}</h3><p>${a.desc}</p>
+      <div class="asmt-card-foot"><span>${a.meta}${mine?` · last ${mine.date}`:''}</span>
+        <button data-start-asmt="${a.id}" aria-label="Start ${s.name}">Start →</button></div>
+    </article>`;
   }).join('');
-  document.querySelectorAll('.asmt-start').forEach(b => b.onclick = () => {
-    $('#pss-card').classList.remove('hidden');
-    $('#pss-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
-  });
+  document.querySelectorAll('[data-start-asmt]').forEach(b=>b.onclick=()=>startAssessment(b.dataset.startAsmt));
 }
-$('#pss-close').onclick = () => $('#pss-card').classList.add('hidden');
+function startAssessment(id) {
+  activeAsmt=id; asmtIndex=0; asmtAnswers=Array(ASSESSMENTS[id].questions.length).fill(null);
+  $('#asmt-home').classList.add('hidden'); $('#asmt-result').classList.add('hidden'); $('#asmt-runner').classList.remove('hidden');
+  renderAssessmentQuestion(); window.scrollTo({top:0,behavior:'smooth'});
+}
+function renderAssessmentQuestion() {
+  const a=ASSESSMENTS[activeAsmt], total=a.questions.length, answer=asmtAnswers[asmtIndex];
+  $('#asmt-kind').textContent=a.short; $('#asmt-title').textContent=a.name;
+  $('#asmt-step').textContent=`${asmtIndex+1} of ${total}`; $('#asmt-progress-bar').style.width=`${(asmtIndex+1)/total*100}%`;
+  $('#asmt-period').textContent=a.period; $('#asmt-question').textContent=a.questions[asmtIndex];
+  $('#asmt-attribution').innerHTML=`Source: <a href="${a.sourceUrl}" target="_blank" rel="noopener">${a.source}</a>`;
+  $('#asmt-options').innerHTML=a.options.map(([v,label])=>`<button class="asmt-option ${answer===v?'selected':''}" data-value="${v}">
+    <span class="asmt-option-check">${answer===v?'✓':''}</span><span>${label}</span></button>`).join('');
+  $('#asmt-options').querySelectorAll('.asmt-option').forEach(b=>b.onclick=()=>{
+    asmtAnswers[asmtIndex]=+b.dataset.value; renderAssessmentQuestion();
+  });
+  $('#asmt-prev').disabled=asmtIndex===0; $('#asmt-next').disabled=answer===null;
+  $('#asmt-next').innerHTML=asmtIndex===total-1?'See my result <span>→</span>':'Next <span>→</span>';
+}
+$('#asmt-exit').onclick=assessmentHome;
+$('#asmt-prev').onclick=()=>{if(asmtIndex>0){asmtIndex--;renderAssessmentQuestion();}};
+$('#asmt-next').onclick=async()=>{
+  if(asmtAnswers[asmtIndex]===null)return;
+  if(asmtIndex<ASSESSMENTS[activeAsmt].questions.length-1){asmtIndex++;renderAssessmentQuestion();return;}
+  $('#asmt-next').disabled=true; $('#asmt-next').textContent='Saving…';
+  try {
+    const result=await api('/api/assessment',{method:'POST',body:JSON.stringify({type:activeAsmt,answers:asmtAnswers})});
+    showAssessmentResult(result);
+  } catch(e) { toast(e.message); renderAssessmentQuestion(); }
+};
+function assessmentHome(){
+  $('#asmt-runner').classList.add('hidden');$('#asmt-result').classList.add('hidden');$('#asmt-home').classList.remove('hidden');renderAssessments();
+}
+function showAssessmentResult(r){
+  const a=ASSESSMENTS[r.type], who=r.type==='WHO5', max={WHO5:100,PSS10:40,GAD7:21,PHQ9:27}[r.type];
+  const shown=r.display_score, pct=who?shown:Math.round(shown/max*100);
+  $('#asmt-runner').classList.add('hidden'); $('#asmt-result').classList.remove('hidden');
+  $('#asmt-result').innerHTML=`<div class="asmt-result-card ${r.urgent?'urgent':''}">
+    <span class="asmt-result-icon">${r.urgent?'!':'✓'}</span><span class="asmt-eyebrow">Assessment complete</span>
+    <h1>${r.level}</h1><p class="asmt-result-lead">${r.guidance}</p>
+    <div class="asmt-score-row"><div><b>${shown}</b><span>${who?'out of 100':'out of '+max}</span></div>
+      <div class="asmt-score-track"><i style="width:${pct}%"></i></div></div>
+    ${r.urgent?`<div class="asmt-urgent-box"><b>Get immediate support</b><p>Call emergency services (112), Tele-MANAS at <b>14416</b>, or KIRAN at <b>1800-599-0019</b>. If possible, stay with someone you trust.</p></div>`:''}
+    <p class="asmt-disclaimer">This is a screening result, not a diagnosis. A qualified health professional can interpret it alongside your circumstances.</p>
+    <div class="asmt-result-actions"><button class="asmt-hero-action" id="asmt-done">Back to assessments</button>
+      <a href="${a.sourceUrl}" target="_blank" rel="noopener">View official source ↗</a></div></div>`;
+  $('#asmt-done').onclick=assessmentHome; window.scrollTo({top:0,behavior:'smooth'});
+}
 
 function drawSpark(cv, vals) {
   const ctx = cv.getContext('2d');
@@ -247,21 +331,6 @@ $('#ci-save').onclick = async () => {
   toast('Check-in recorded');
   loadPersonnel();
 };
-$('#pss-save').onclick = async () => {
-  const answers = [];
-  for (let i = 0; i < 10; i++) {
-    const el = document.querySelector(`input[name=pss${i}]:checked`);
-    if (!el) { toast('Please answer all 10 questions'); return; }
-    answers.push(+el.value);
-  }
-  const j = await api('/api/assessment', { method: 'POST', body: JSON.stringify({ type: 'PSS10', answers }) });
-  $('#pss-msg').textContent = `✓ Assessment saved (score ${j.score}/100). A welfare officer will reach out if supportive follow-up would help.`;
-  $('#pss-msg').classList.remove('hidden');
-  toast('Assessment submitted');
-  lastAsmts = [{ date: new Date().toISOString().slice(0, 10), type: 'PSS10', score: j.score }, ...lastAsmts.filter(a => a.type !== 'PSS10')];
-  renderAssessments();
-};
-
 /* ==== welfare & commander (part 4) ==== */
 async function loadCommander() {
   const j = await api('/api/dashboard/unit');
@@ -705,15 +774,6 @@ function jrDrawStats(days) {
   ctx.fillStyle=themeCol('--muted');ctx.fillText(days[0].date.slice(5),l,H-10);ctx.fillText('today',W-r-34,H-10);
 }
 
-/* ---------------- PSS form render + init ---------------- */
-(function initPss() {
-  $('#pss').innerHTML = PSS_Q.map((q, i) => `
-    <div style="margin-bottom:4px">
-      <label style="margin:8px 0 2px">${i + 1}. ${q}</label>
-      <div>${[0,1,2,3,4].map(v =>
-        `<label class="chk" style="display:inline-flex;margin-right:14px"><input type="radio" name="pss${i}" value="${v}"> ${v}</label>`).join('')}</div>
-    </div>`).join('');
-})();
 // auto-login if session exists
 api('/api/me').then(j => { me = j.user; boot(); }).catch(() => {});
 

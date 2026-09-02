@@ -136,16 +136,48 @@ app.post('/api/checkin', requireAuth(['personnel']), (req, res) => {
 
 app.post('/api/assessment', requireAuth(['personnel']), (req, res) => {
   const { type, answers } = req.body || {};
-  if (!['PSS10'].includes(type)) return send(res, 400, { error: 'Unknown assessment type' });
-  if (!Array.isArray(answers) || answers.length !== 10 || answers.some(a => !(a >= 0 && a <= 4)))
-    return send(res, 400, { error: '10 answers with values 0-4 required' });
-  // PSS-10 style: score normalized to 0-100
-  const raw = answers.reduce((s, a) => s + Number(a), 0); // 0..40
-  const score = Math.round((raw / 40) * 100);
+  const spec = {
+    WHO5: { count: 5, maxAnswer: 5 },
+    PSS10: { count: 10, maxAnswer: 4 },
+    GAD7: { count: 7, maxAnswer: 3 },
+    PHQ9: { count: 9, maxAnswer: 3 }
+  }[type];
+  if (!spec) return send(res, 400, { error: 'Unknown assessment type' });
+  if (!Array.isArray(answers) || answers.length !== spec.count ||
+      answers.some(a => !Number.isInteger(Number(a)) || a < 0 || a > spec.maxAnswer))
+    return send(res, 400, { error: `${spec.count} answers with values 0-${spec.maxAnswer} required` });
+  const values = answers.map(Number);
+  let raw, displayScore, score, level, guidance, urgent = false;
+  if (type === 'WHO5') {
+    raw = values.reduce((s, a) => s + a, 0);             // 0..25
+    displayScore = raw * 4;                               // official 0..100 wellbeing score
+    score = 100 - displayScore;                           // normalized support-need direction
+    level = displayScore > 50 ? 'Good wellbeing' : displayScore >= 29 ? 'Low wellbeing' : 'Very low wellbeing';
+    guidance = displayScore <= 50
+      ? 'Your result suggests it may help to speak with a qualified health professional for a fuller assessment.'
+      : 'Your answers suggest positive current wellbeing. Continue checking in over time to notice changes.';
+  } else if (type === 'PSS10') {
+    // Official scoring reverses the four positively stated items (4, 5, 7, 8; zero-based 3,4,6,7).
+    raw = values.reduce((s, a, i) => s + ([3,4,6,7].includes(i) ? 4 - a : a), 0);
+    displayScore = raw; score = Math.round(raw / 40 * 100);
+    level = raw <= 13 ? 'Low perceived stress' : raw <= 26 ? 'Moderate perceived stress' : 'High perceived stress';
+    guidance = raw >= 27 ? 'High perceived stress can be worth discussing with a qualified professional.' : 'Use this result as a personal baseline and look for changes over time.';
+  } else if (type === 'GAD7') {
+    raw = values.reduce((s, a) => s + a, 0); displayScore = raw; score = Math.round(raw / 21 * 100);
+    level = raw <= 4 ? 'Minimal anxiety' : raw <= 9 ? 'Mild anxiety' : raw <= 14 ? 'Moderate anxiety' : 'Severe anxiety';
+    guidance = raw >= 10 ? 'This screening result supports considering a conversation with a qualified health professional.' : 'Track how these feelings change; seek support whenever they interfere with daily life.';
+  } else {
+    raw = values.reduce((s, a) => s + a, 0); displayScore = raw; score = Math.round(raw / 27 * 100);
+    level = raw <= 4 ? 'Minimal symptoms' : raw <= 9 ? 'Mild symptoms' : raw <= 14 ? 'Moderate symptoms' : raw <= 19 ? 'Moderately severe symptoms' : 'Severe symptoms';
+    urgent = values[8] > 0;
+    if (urgent) score = Math.max(60, score); // safety signal; displayed PHQ-9 total remains unchanged
+    guidance = urgent ? 'You indicated thoughts of self-harm or being better off dead. Please contact immediate support now and do not stay alone.'
+      : raw >= 10 ? 'This screening result supports considering a conversation with a qualified health professional.' : 'Track changes over time and reach out if symptoms persist or worsen.';
+  }
   db.prepare('INSERT INTO assessments (personnel_id, date, type, score, answers) VALUES (?,?,?,?,?)')
-    .run(req.user.personnel_id, todayStr(), type, score, JSON.stringify(answers));
+    .run(req.user.personnel_id, todayStr(), type, score, JSON.stringify(values));
   runPipeline();
-  send(res, 200, { ok: true, score });
+  send(res, 200, { ok: true, type, raw, display_score: displayScore, risk_score: score, level, guidance, urgent });
 });
 
 app.get('/api/my-status', requireAuth(['personnel']), (req, res) => {
@@ -157,7 +189,7 @@ app.get('/api/my-status', requireAuth(['personnel']), (req, res) => {
   const mine = db.prepare(`SELECT date, stress, sleep_hours FROM checkins WHERE personnel_id = ? ORDER BY date DESC LIMIT 30`).all(pid);
   const accessed = db.prepare(`SELECT a.action, a.at, u.name AS actor, u.role FROM audit_log a
     JOIN users u ON u.id = a.actor_id WHERE a.target_personnel = ? ORDER BY a.at DESC LIMIT 10`).all(pid);
-  const asmts = db.prepare(`SELECT date, type, score FROM assessments WHERE personnel_id = ? ORDER BY date DESC, id DESC LIMIT 5`).all(pid);
+  const asmts = db.prepare(`SELECT date, type, score FROM assessments WHERE personnel_id = ? ORDER BY date DESC, id DESC LIMIT 20`).all(pid);
   send(res, 200, { risk: r, checkins: mine.reverse(), accessed, assessments: asmts });
 });
 
