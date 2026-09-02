@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SENTINEL — Personnel Welfare Monitoring</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -44,7 +47,8 @@
   </header>
   <div id="banner" class="banner hidden"></div>
 
-  <main id="view-personnel" class="view hidden">
+  <main id="view-dashboard" class="view hidden">
+    <div id="my-tiles" class="tiles"></div>
     <div class="cols">
       <section class="card">
         <h3>Daily wellness check-in</h3>
@@ -66,23 +70,34 @@
         <p id="ci-msg" class="okmsg hidden"></p>
       </section>
       <section class="card">
-        <h3>My wellness summary</h3>
-        <div id="my-risk"></div>
+        <h3>My stress trend</h3>
         <canvas id="my-chart" width="560" height="160"></canvas>
-        <h3>Transparency — who viewed my record</h3>
+        <h3 style="margin-top:14px">Transparency — who viewed my record</h3>
         <div id="my-access" class="access-log"></div>
         <div class="helpline">
           📞 <b>Need to talk now?</b> Mental Health Rehabilitation Helpline: <b>1800-599-0019 (KIRAN)</b>
         </div>
       </section>
     </div>
-    <section class="card">
-      <h3>Standardized wellness assessment (PSS-10 style)</h3>
-      <p class="muted">10 questions · last month · answers rated 0 (never) – 4 (very often)</p>
+  </main>
+
+  <main id="view-assessments" class="view hidden">
+    <div class="card wide">
+      <h3>🧩 Standardized wellness assessments</h3>
+      <p class="muted">Validated psychological questionnaires — the same instruments used by professionals.
+        Your answers and scores stay confidential and are used only to offer supportive care, never discipline.</p>
+      <div id="asmt-grid" class="asmt-grid"></div>
+    </div>
+    <div class="card wide hidden" id="pss-card">
+      <div class="row-between">
+        <h3>Perceived Stress Scale (PSS-10)</h3>
+        <button id="pss-close" class="btn ghost">✕ Close</button>
+      </div>
+      <p class="muted">10 questions · thinking about the last month · rate each 0 (never) – 4 (very often)</p>
       <div id="pss"></div>
       <button id="pss-save" class="btn primary">Submit assessment</button>
       <p id="pss-msg" class="okmsg hidden"></p>
-    </section>
+    </div>
   </main>
 
   <main id="view-journal" class="view hidden">
