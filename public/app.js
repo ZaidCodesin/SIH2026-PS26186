@@ -9,6 +9,28 @@ const api = async (url, opts = {}) => {
   return j;
 };
 const BAND_COLOR = { Low: '#2eb872', Watch: '#f4b400', Elevated: '#e67e22', Critical: '#e74c3c' };
+
+/* ---- dark / light theme toggle ---- */
+const themeCol = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+let curView = null;
+(function initTheme() {
+  document.documentElement.dataset.theme = localStorage.getItem('sentinel-theme') || 'dark';
+  const btn = $('#theme-toggle');
+  const paint = () => {
+    const light = document.documentElement.dataset.theme === 'light';
+    btn.textContent = light ? '🌙' : '☀️';
+    btn.title = light ? 'Switch to dark mode' : 'Switch to light mode';
+  };
+  btn.onclick = () => {
+    const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+    document.documentElement.dataset.theme = next;
+    localStorage.setItem('sentinel-theme', next);
+    paint();
+    // redraw canvas charts so their colors match the new theme
+    if (curView && !$('#app-view').classList.contains('hidden')) showView(curView);
+  };
+  paint();
+})();
 const PSS_Q = [
   'Been upset because of something that happened unexpectedly?',
   'Felt unable to control the important things in your life?',
@@ -66,6 +88,7 @@ function boot() {
   showView(me.role === 'personnel' ? 'personnel' : me.role === 'welfare' ? 'welfare' : 'commander');
 }
 function showView(v) {
+  curView = v;
   document.querySelectorAll('.view').forEach(x => x.classList.add('hidden'));
   document.querySelectorAll('#nav .btn').forEach(b => b.classList.toggle('on', b.dataset.view === v));
   $('#view-' + v).classList.remove('hidden');
@@ -96,7 +119,7 @@ function drawGauge(score, color) {
   const cx = 75, cy = 80, rad = 60;
   ctx.clearRect(0, 0, 150, 90);
   ctx.lineWidth = 14; ctx.lineCap = 'round';
-  ctx.strokeStyle = '#2a3b4d';
+  ctx.strokeStyle = themeCol('--line');
   ctx.beginPath(); ctx.arc(cx, cy, rad, Math.PI, 2 * Math.PI); ctx.stroke();
   ctx.strokeStyle = color;
   ctx.beginPath(); ctx.arc(cx, cy, rad, Math.PI, Math.PI + (score / 100) * Math.PI); ctx.stroke();
@@ -106,7 +129,7 @@ function drawGauge(score, color) {
 function drawSpark(cv, vals) {
   const ctx = cv.getContext('2d');
   ctx.clearRect(0, 0, cv.width, cv.height);
-  ctx.fillStyle = '#8aa0b4'; ctx.font = '12px Segoe UI';
+  ctx.fillStyle = themeCol('--muted'); ctx.font = '12px Segoe UI';
   ctx.fillText('Your stress check-ins (last 30)', 8, 16);
   if (vals.length < 2) { ctx.fillText('Not enough data yet — check in daily!', 8, 60); return; }
   const W = cv.width - 30, H = cv.height - 40, max = 10;
@@ -165,13 +188,13 @@ async function loadCommander() {
 function drawTrend(cv, trend) {
   const ctx = cv.getContext('2d');
   ctx.clearRect(0, 0, cv.width, cv.height);
-  ctx.fillStyle = '#8aa0b4'; ctx.font = '12px Segoe UI';
+  ctx.fillStyle = themeCol('--muted'); ctx.font = '12px Segoe UI';
   if (trend.length < 2) { ctx.fillText('Risk trend builds as the engine runs daily — press Recalculate to store today\'s snapshot.', 10, 60); return; }
   const padL = 40, W = cv.width - padL - 12, H = cv.height - 44;
   const maxS = 100;
   const X = i => padL + (i / (trend.length - 1)) * W;
   const Y = v => 20 + H * (1 - v / maxS);
-  ctx.strokeStyle = '#2a3b4d';
+  ctx.strokeStyle = themeCol('--line');
   [0, 25, 50, 75, 100].forEach(g => { ctx.beginPath(); ctx.moveTo(padL, Y(g)); ctx.lineTo(padL + W, Y(g)); ctx.stroke(); ctx.fillText(g, 12, Y(g)); });
   ctx.strokeStyle = '#e74c3c'; ctx.lineWidth = 2; ctx.beginPath();
   trend.forEach((t, i) => { i ? ctx.lineTo(X(i), Y(t.flagged)) : ctx.moveTo(X(i), Y(t.flagged)); });
