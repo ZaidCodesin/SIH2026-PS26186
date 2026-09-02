@@ -10,26 +10,25 @@ const api = async (url, opts = {}) => {
 };
 const BAND_COLOR = { Low: '#2eb872', Watch: '#f4b400', Elevated: '#e67e22', Critical: '#e74c3c' };
 
-/* ---- dark / light theme toggle ---- */
+/* ---- dark / light theme — pull the cord! ---- */
 const themeCol = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 let curView = null;
 (function initTheme() {
   document.documentElement.dataset.theme = localStorage.getItem('sentinel-theme') || 'dark';
   const btn = $('#theme-toggle');
-  const paint = () => {
-    const light = document.documentElement.dataset.theme === 'light';
-    btn.textContent = light ? '🌙' : '☀️';
-    btn.title = light ? 'Switch to dark mode' : 'Switch to light mode';
-  };
   btn.onclick = () => {
-    const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
-    document.documentElement.dataset.theme = next;
-    localStorage.setItem('sentinel-theme', next);
-    paint();
-    // redraw canvas charts so their colors match the new theme
-    if (curView && !$('#app-view').classList.contains('hidden')) showView(curView);
+    if (btn.classList.contains('pulling')) return; // ignore spam clicks mid-pull
+    btn.classList.add('pulling');
+    // flip the theme at the bottom of the pull, like the light actually switching
+    setTimeout(() => {
+      const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+      document.documentElement.dataset.theme = next;
+      localStorage.setItem('sentinel-theme', next);
+      // redraw canvas charts so their colors match the new theme
+      if (curView && !$('#app-view').classList.contains('hidden')) showView(curView);
+    }, 200);
+    setTimeout(() => btn.classList.remove('pulling'), 650);
   };
-  paint();
 })();
 const PSS_Q = [
   'Been upset because of something that happened unexpectedly?',
