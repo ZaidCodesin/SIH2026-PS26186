@@ -73,6 +73,7 @@ function showView(v) {
   if (v === 'journal') loadJournal();
   if (v === 'commander') loadCommander();
   if (v === 'welfare') loadWelfare();
+  if (jrListening) jrStopMic(); // defined below — stops dictation when leaving journal
 }
 
 /* ==== personnel app (part 3) ==== */
@@ -348,6 +349,70 @@ $('#jr-editor').addEventListener('input', () => {
   jrTimer = setTimeout(saveJournal, 2500); // autosave 2.5s after last keystroke
 });
 window.addEventListener('beforeunload', () => { if (jrDirty) saveJournal(true); });
+
+/* ---- voice dictation (Web Speech API — free browser engine, no API keys) ---- */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let jrRec = null, jrListening = false;
+
+if (!SR) {
+  $('#jr-mic').disabled = true;
+  $('#jr-mic').title = 'Voice input needs Chrome, Edge, or Safari';
+} else {
+  jrRec = new SR();
+  jrRec.continuous = true;
+  jrRec.interimResults = true;
+
+  jrRec.onresult = e => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) jrAppendSpoken(t);
+      else interim += t;
+    }
+    $('#jr-mic-status').textContent = jrListening ? (interim ? '… ' + interim : 'listening…') : '';
+  };
+  jrRec.onend = () => { if (jrListening) { try { jrRec.start(); } catch {} } }; // resume after silence pauses
+  jrRec.onerror = ev => {
+    if (ev.error === 'not-allowed') {
+      jrStopMic();
+      $('#jr-mic-status').textContent = '⚠ microphone blocked — allow mic access in your browser';
+    } else if (ev.error !== 'no-speech' && ev.error !== 'aborted') {
+      $('#jr-mic-status').textContent = '⚠ mic error: ' + ev.error;
+    }
+  };
+}
+
+function jrAppendSpoken(text) {
+  const clean = (text || '').trim();
+  if (!clean) return;
+  const ed = $('#jr-editor');
+  const sep = ed.value && !/\s$/.test(ed.value) ? ' ' : '';
+  ed.value += sep + clean.charAt(0).toUpperCase() + clean.slice(1) + '. ';
+  ed.dispatchEvent(new Event('input')); // reuse autosave + live counters
+  ed.scrollTop = ed.scrollHeight;
+}
+
+function jrStopMic() {
+  jrListening = false;
+  $('#jr-mic').classList.remove('recording');
+  $('#jr-mic').textContent = '🎤 Speak';
+  $('#jr-mic-status').textContent = '';
+  try { if (jrRec) jrRec.stop(); } catch {}
+}
+
+$('#jr-mic').addEventListener('click', () => {
+  if (!SR) { toast('Voice input works in Chrome, Edge, or Safari'); return; }
+  if (jrListening) return jrStopMic();
+  jrRec.lang = $('#jr-lang').value;
+  try { jrRec.start(); } catch { return; }
+  jrListening = true;
+  $('#jr-mic').classList.add('recording');
+  $('#jr-mic').textContent = '⏹ Stop';
+  $('#jr-mic-status').textContent = 'listening… speak naturally';
+});
+$('#jr-lang').addEventListener('change', () => {
+  if (jrListening) { jrStopMic(); setTimeout(() => $('#jr-mic').click(), 250); }
+});
 
 async function saveJournal(sync) {
   const body = { date: jrDate, content: $('#jr-editor').value,

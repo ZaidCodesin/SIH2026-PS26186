@@ -88,3 +88,19 @@ canvas { max-width: 100%; }
 .jr-day { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; font-size: 13px; }
 .jr-day.b { border-color: var(--blue); }
 .jr-day.g { border-color: var(--accent); color: var(--accent); }
+
+/* ---- voice dictation ---- */
+.jr-voice { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
+.mic-btn { border: 1px solid var(--line); background: var(--panel2); border-radius: 20px; padding: 7px 16px;
+  font: inherit; font-weight: 600; cursor: pointer; transition: all .2s; }
+.mic-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.mic-btn:disabled { opacity: .45; cursor: not-allowed; }
+.mic-btn.recording { background: #e74c3c; border-color: #e74c3c; color: #fff;
+  animation: mic-pulse 1.2s infinite; }
+@keyframes mic-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(231, 76, 60, .45); }
+  70% { box-shadow: 0 0 0 10px rgba(231, 76, 60, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0); }
+}
+#jr-lang { padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; font: inherit; background: var(--panel2); color: var(--ink); }
+#jr-mic-status { font-size: 13px; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
