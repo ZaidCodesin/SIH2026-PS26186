@@ -14,6 +14,7 @@ const app = express();
 app.use(express.json({ limit: '1mb' }));
 
 const PORT = process.env.PORT || 4400;
+const APP_VERSION = process.env.RENDER_GIT_COMMIT || process.env.APP_VERSION || 'local-dev';
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
 // auto-seed demo data on fresh deploys (e.g. Render free tier with empty disk)
@@ -74,6 +75,10 @@ app.get('/api/me', (req, res) => {
   const u = getUser(req);
   if (!u) return send(res, 401, { error: 'Not logged in' });
   send(res, 200, { user: { id: u.id, username: u.username, role: u.role, name: u.name, unit_id: u.unit_id } });
+});
+app.get('/api/version', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  send(res, 200, { version: APP_VERSION, features: ['WHO5', 'journal-insights-v1'] });
 });
 
 /* ==== risk pipeline & API routes appended below ==== */
@@ -434,5 +439,14 @@ app.get('/api/dashboard/unit', requireAuth(['commander', 'welfare']), (req, res)
   send(res, 200, { units: out, trend });
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
+// Never let an old HTML/app.js stay paired with a newly deployed API. Assets such
+// as CSS/images may still be revalidated by the browser, but application shells
+// are always fetched fresh after a Render deployment.
+app.use(express.static(path.join(__dirname, 'public'), {
+  etag: true,
+  setHeaders(res, filePath) {
+    if (/\.(?:html|js)$/i.test(filePath)) res.setHeader('Cache-Control', 'no-store, must-revalidate');
+    else res.setHeader('Cache-Control', 'public, max-age=300, must-revalidate');
+  }
+}));
 app.listen(PORT, () => console.log(`SENTINEL running → http://localhost:${PORT}`));

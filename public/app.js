@@ -281,7 +281,12 @@ $('#asmt-next').onclick=async()=>{
   try {
     const result=await api('/api/assessment',{method:'POST',body:JSON.stringify({type:activeAsmt,answers:asmtAnswers})});
     showAssessmentResult(result);
-  } catch(e) { toast(e.message); renderAssessmentQuestion(); }
+  } catch(e) {
+    const mismatch = /unknown assessment type/i.test(e.message);
+    toast(mismatch ? 'The website was just updated. Refreshing to load the matching assessment version…' : e.message);
+    if (mismatch) return setTimeout(() => location.reload(), 1400);
+    renderAssessmentQuestion();
+  }
 };
 function assessmentHome(){
   $('#asmt-runner').classList.add('hidden');$('#asmt-result').classList.add('hidden');$('#asmt-home').classList.remove('hidden');renderAssessments();
