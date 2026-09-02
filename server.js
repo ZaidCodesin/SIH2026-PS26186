@@ -19,6 +19,8 @@ const todayStr = () => new Date().toISOString().slice(0, 10);
 if (db.prepare('SELECT COUNT(*) c FROM personnel').get().c === 0) {
   console.log('Empty database detected — seeding demo data...');
   require('./lib/seed');
+  console.log('Running initial risk pipeline...');
+  runPipeline();
 }
 
 /* ---------------- helpers ---------------- */
