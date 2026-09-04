@@ -612,12 +612,12 @@ window.addEventListener('beforeunload', () => { if (jrDirty) saveJournal(true); 
 
 /* ---- voice dictation (Web Speech API — browser-provided, no app API key) ---- */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-const JR_MIC_MAX_RESTARTS = 2;
+const JR_MIC_MAX_RESTARTS = 6;
 const JR_MIC_DUPLICATE_MS = 8000;
 let jrRec = null, jrListening = false, jrMicSession = 0, jrMicRun = 0;
 let jrMicRestarts = 0, jrMicRestartTimer = null;
 let jrMicHandledResults = new Set(), jrMicRecentFinals = [];
-let jrLastFinalRaw = '', jrLastAppended = '', jrLastDest = '', jrActiveLang = '';
+let jrDictBase = '', jrDictCommitted = '', jrDictChunk = '', jrActiveLang = '';
 
 /* script ranges let auto mode switch the engine when the spoken language changes */
 const JR_SCRIPT_LANGS = [
@@ -679,46 +679,47 @@ function jrHandleFinal(session, run, resultIndex, alternative) {
 
   const transcript = alternative && alternative.transcript;
   if (!transcript || !transcript.trim()) return true;
+  jrMicRestarts = 0; // engine is producing results — restart budget resets
   jrMaybeSwitchLang(transcript);
+  const conf = (typeof alternative.confidence === 'number' && alternative.confidence > 0) ? alternative.confidence : 0.9;
+  if (conf < CONF_AUTO) {
+    const d = $('#jr-draft');
+    d.value = (d.value ? d.value + ' ' : '') + voiceFix(transcript);
+    $('#jr-draft-wrap').classList.remove('hidden');
+    $('#jr-mic-status').textContent = 'Review needed · listening';
+    return true;
+  }
   const newFp = jrFinalFingerprint(transcript);
-  const lastFp = jrFinalFingerprint(jrLastFinalRaw);
-  // speech engines often re-deliver the same utterance grown longer;
-  // replace the earlier version instead of stacking copies of it
-  if (lastFp && newFp.startsWith(lastFp) && newFp.length > lastFp) {
-    jrReplaceLast(transcript, alternative && alternative.confidence);
-    return true;
+  const chunkFp = jrFinalFingerprint(jrDictChunk);
+  if (chunkFp && (newFp.startsWith(chunkFp) || chunkFp.startsWith(newFp))) {
+    // engine re-delivered the same utterance (possibly grown) — keep the longer
+    // version instead of stacking a copy
+    if (newFp.length >= chunkFp.length) jrDictChunk = transcript;
+  } else {
+    jrDictCommitted = (jrDictCommitted + ' ' + jrDictChunk).trim();
+    jrDictChunk = transcript;
   }
-  jrLastFinalRaw = transcript;
-  jrLastAppended = '';
-  if (jrIsRepeatedFinal(transcript)) {
-    $('#jr-mic-status').textContent = 'Duplicate ignored · listening';
-    return true;
-  }
-  jrRouteHeard(transcript, alternative && alternative.confidence);
+  jrRebuildDictation();
+  $('#jr-mic-status').textContent = 'Added · listening';
   return true;
 }
 
-function jrReplaceLast(transcript, conf) {
-  const fixed = voiceFix(transcript);
-  if (!fixed) return;
-  const piece = fixed.charAt(0).toUpperCase() + fixed.slice(1) + ' ';
-  if (jrLastDest === 'draft') {
-    $('#jr-draft').value = piece.trim();
-    $('#jr-mic-status').textContent = 'Review updated · listening';
-    jrLastAppended = piece;
-    return;
-  }
+/* the dictation tail is always rebuilt from finalized phrases, so no matter
+   how the engine re-delivers audio, duplicates can never pile up */
+function jrRebuildDictation(ghost) {
   const ed = $('#jr-editor');
-  if (jrLastAppended && ed.value.endsWith(jrLastAppended)) {
-    ed.value = ed.value.slice(0, ed.value.length - jrLastAppended.length);
+  const spoken = (jrDictCommitted + ' ' + jrDictChunk).trim();
+  let tail = spoken ? voiceFix(spoken) : '';
+  const ghostText = (ghost || '').trim();
+  if (ghostText) tail = (tail ? tail + ' ' : '') + ghostText;
+  if (!tail) {
+    ed.value = jrDictBase;
+  } else {
+    const sep = jrDictBase && !/\s$/.test(jrDictBase) ? ' ' : '';
+    ed.value = jrDictBase + sep + tail + ' ';
   }
-  const sep = ed.value && !/\s$/.test(ed.value) ? ' ' : '';
-  const appended = sep + piece;
-  ed.value += appended;
   ed.dispatchEvent(new Event('input'));
   ed.scrollTop = ed.scrollHeight;
-  jrLastAppended = appended;
-  $('#jr-mic-status').textContent = 'Updated · listening';
 }
 
 function jrBeginRecognition(session) {
@@ -742,7 +743,7 @@ function jrBeginRecognition(session) {
       else if (jrListening) interim += alternative.transcript;
     }
     if (jrListening && interim.trim().length > 8) jrMaybeSwitchLang(interim.trim());
-    if (jrListening && interim.trim()) $('#jr-mic-status').textContent = '… ' + interim.trim();
+    if (jrListening && interim.trim()) { jrRebuildDictation(interim.trim()); $('#jr-mic-status').textContent = '… listening'; }
     else if (jrListening && !handledFinal) $('#jr-mic-status').textContent = 'Listening…';
   };
   rec.onerror = ev => {
@@ -816,25 +817,8 @@ function voiceFix(t) {
   return s;
 }
 
-/* confidence routing: trustworthy phrases flow in, doubtful ones wait for review */
+/* phrases below the confidence threshold wait for human review */
 const CONF_AUTO = 0.75;
-function jrRouteHeard(text, conf) {
-  const c = (typeof conf === 'number' && conf > 0) ? conf : 0.9; // engines without confidence -> trust
-  const fixed = voiceFix(text);
-  if (!fixed) return;
-  if (c >= CONF_AUTO) {
-    jrLastAppended = jrAppendSpoken(fixed);
-    jrLastDest = 'editor';
-    $('#jr-mic-status').textContent = 'Added · listening';
-  } else {
-    const d = $('#jr-draft');
-    d.value = (d.value ? d.value + ' ' : '') + fixed;
-    jrLastAppended = fixed + ' ';
-    jrLastDest = 'draft';
-    $('#jr-draft-wrap').classList.remove('hidden');
-    $('#jr-mic-status').textContent = 'Review needed · listening';
-  }
-}
 
 function jrAppendSpoken(text) {
   const clean = (text || '').trim();
@@ -852,13 +836,11 @@ function jrAppendSpoken(text) {
 $('#jr-draft-ok').addEventListener('click', () => {
   const d = $('#jr-draft');
   if (d.value.trim()) { jrAppendSpoken(voiceFix(d.value)); d.value = ''; }
-  jrLastFinalRaw = ''; jrLastAppended = '';
   $('#jr-draft-wrap').classList.add('hidden');
   $('#jr-mic-status').textContent = jrListening ? 'Added · listening' : 'Added';
 });
 $('#jr-draft-no').addEventListener('click', () => {
   $('#jr-draft').value = '';
-  jrLastFinalRaw = ''; jrLastAppended = '';
   $('#jr-draft-wrap').classList.add('hidden');
   $('#jr-mic-status').textContent = jrListening ? 'Discarded · listening' : 'Discarded';
 });
@@ -870,7 +852,7 @@ function jrStopMic(status = '') {
   const rec = jrRec;
   jrRec = null;
   jrSetMicUi(false, status);
-  jrLastFinalRaw = ''; jrLastAppended = '';
+  jrDictCommitted = ''; jrDictChunk = ''; jrDictBase = '';
   try { if (rec) rec.stop(); } catch {}
 }
 
@@ -881,7 +863,7 @@ function jrStartMic() {
   jrMicRestarts = 0;
   jrMicHandledResults = new Set();
   jrMicRecentFinals = [];
-  jrLastFinalRaw = ''; jrLastAppended = ''; jrActiveLang = '';
+  jrDictBase = $('#jr-editor').value; jrDictCommitted = ''; jrDictChunk = ''; jrActiveLang = '';
   jrListening = true;
   localStorage.setItem('sentinel-jr-lang', $('#jr-lang').value);
   jrSetMicUi(true, 'Starting…');
