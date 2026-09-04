@@ -6,7 +6,7 @@ const express = require('express');
 const crypto = require('crypto');
 const path = require('path');
 const db = require('./lib/db');
-const { computeRisk } = require('./lib/risk');
+const { computeRisk, computeEarlyIndicator } = require('./lib/risk');
 const { recommend } = require('./lib/recommend');
 const { analyze: analyzeJournal, speedStats } = require('./lib/journal-analyze');
 
@@ -24,6 +24,7 @@ app.use((req, res, next) => {
 
 const PORT = process.env.PORT || 4400;
 const APP_VERSION = process.env.RENDER_GIT_COMMIT || process.env.APP_VERSION || 'local-dev';
+const DEMO_MODE = process.env.DEMO_ACCOUNTS !== 'false';
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
 // auto-seed demo data on fresh deploys (e.g. Render free tier with empty disk)
@@ -57,7 +58,18 @@ function getUser(req) {
     db.prepare('DELETE FROM sessions WHERE sid = ?').run(sid);
     return null;
   }
-  return db.prepare('SELECT * FROM users WHERE id = ?').get(s.user_id) || null;
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(s.user_id) || null;
+  if (!user) return null;
+  if (user.role === 'personnel') {
+    const person = user.personnel_id
+      ? db.prepare('SELECT active FROM personnel WHERE id = ?').get(user.personnel_id)
+      : null;
+    if (!person || !person.active) {
+      db.prepare('DELETE FROM sessions WHERE sid = ?').run(sid);
+      return null;
+    }
+  }
+  return user;
 }
 function requireAuth(roles) {
   return (req, res, next) => {
@@ -73,22 +85,51 @@ function audit(actor, action, target, justification) {
     .run(actor.id || actor, action, target || null, justification || '', new Date().toISOString());
 }
 
+// Expired bearer sessions should not accumulate indefinitely. The interval is
+// unref'd so it never keeps a test process or graceful shutdown alive.
+function pruneSessions() {
+  db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(new Date().toISOString());
+}
+pruneSessions();
+const sessionPruner = setInterval(() => { try { pruneSessions(); } catch {} }, 60 * 60 * 1000);
+if (sessionPruner.unref) sessionPruner.unref();
+
+function requestSourceIsSameOrigin(req) {
+  const source = req.get('origin') || req.get('referer');
+  // CLI/local regression clients generally do not send browser origin headers.
+  // In production, authenticated browser mutations must provide one.
+  if (!source) return process.env.NODE_ENV !== 'production';
+  try {
+    const actual = new URL(source);
+    return actual.host === req.get('host');
+  } catch { return false; }
+}
+
+app.use((req, res, next) => {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
+  if (!getUser(req)) return next(); // public login/registration are not cookie-authenticated mutations
+  if (!requestSourceIsSameOrigin(req)) return send(res, 403, { error: 'Cross-origin request blocked' });
+  next();
+});
+
 const sinceDate = n => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
 function avgNum(rows, key) {
   const values = rows.map(r => Number(r[key])).filter(Number.isFinite);
   return values.length ? +(values.reduce((a, b) => a + b, 0) / values.length).toFixed(1) : null;
 }
 function workloadFor(pid, windowDays = 90) {
-  const events = db.prepare('SELECT type, date, value, note FROM hr_events WHERE personnel_id = ? AND date >= ? ORDER BY date DESC').all(pid, sinceDate(windowDays));
+  const events = db.prepare('SELECT * FROM hr_events WHERE personnel_id = ? AND date >= ? ORDER BY date DESC').all(pid, sinceDate(windowDays));
   const sum = type => events.filter(e => e.type === type).reduce((n, e) => n + Number(e.value || 0), 0);
   const count = type => events.filter(e => e.type === type).length;
   return {
     window_days: windowDays,
     overtime_hours: Math.round(sum('duty_overtime')),
-    deployment_starts: count('deployment'), leave_denials: count('leave_denied'),
+    deployment_starts: count('deployment'), leave_denials: count('leave_denied'), leave_approved: count('leave_approved'),
     incident_exposures: count('incident_exposure'), transfers: count('transfer'),
     training_days: Math.round(sum('training')),
-    records: events.filter(e => !['disciplinary'].includes(e.type)).slice(0, 20)
+    recovery_events: count('return_from_deployment') + count('recovery_rest'),
+    last_updated: events.length ? String(events[0].updated_at || events[0].date) : null,
+    records: events.filter(e => !['disciplinary'].includes(e.type)).slice(0, 50)
   };
 }
 
@@ -111,7 +152,7 @@ app.post('/api/login', (req, res) => {
 
   // Prototype personnel may sign in with their service ID. Provisioning is
   // lazy so existing databases gain access without a destructive re-seed.
-  const demoAccess = process.env.DEMO_ACCOUNTS !== 'false';
+  const demoAccess = DEMO_MODE;
   const demoPassword = process.env.DEMO_PERSONNEL_PASSWORD || 'demo123';
   if (!u && matchedUsers.length === 0 && demoAccess && sameSecret(suppliedPassword, demoPassword)) {
     const p = db.prepare('SELECT * FROM personnel WHERE force_id = ? COLLATE NOCASE AND active = 1').get(identifier);
@@ -213,7 +254,17 @@ app.get('/api/me', (req, res) => {
 });
 app.get('/api/version', (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
-  send(res, 200, { version: APP_VERSION, features: ['WHO5', 'journal-insights-v1', 'service-id-login'] });
+  send(res, 200, {
+    version: APP_VERSION,
+    demo_mode: DEMO_MODE,
+    data_label: 'Prototype demonstration using simulated data',
+    features: ['WHO5', 'journal-insights-v1', 'consent-scoped-support', 'organizational-early-indicators']
+  });
+});
+app.get('/api/health', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  send(res, 200, { status: 'ok', version: APP_VERSION, demo_mode: DEMO_MODE,
+    label: 'SENTINEL prototype service' });
 });
 
 /* ==== risk pipeline & API routes appended below ==== */
@@ -285,31 +336,58 @@ setImmediate(() => {
 
 /* ---------------- personnel self-service ---------------- */
 app.post('/api/checkin', requireAuth(['personnel']), (req, res) => {
-  const { stress, sleep_hours, mood, physical_symptoms, feeling_supported } = req.body || {};
+  const { stress, sleep_hours, mood, energy, physical_symptoms, feeling_supported } = req.body || {};
   if (!req.user.personnel_id) return send(res, 400, { error: 'No personnel record linked to this account' });
-  const s = Number(stress), sl = Number(sleep_hours);
+  const s = Number(stress), sl = Number(sleep_hours), en = Number(energy == null ? 3 : energy);
   if (!(s >= 1 && s <= 10)) return send(res, 400, { error: 'stress must be 1-10' });
   if (!(sl >= 0 && sl <= 14)) return send(res, 400, { error: 'sleep_hours must be 0-14' });
-  db.prepare(`INSERT INTO checkins (personnel_id, date, stress, sleep_hours, mood, physical_symptoms, feeling_supported, anonymous)
-    VALUES (?,?,?,?,?,?,?,?)
+  if (!Number.isInteger(en) || en < 1 || en > 5) return send(res, 400, { error: 'energy must be 1-5' });
+  const moodValue = String(mood || '').trim().slice(0, 40);
+  db.prepare(`INSERT INTO checkins (personnel_id, date, stress, sleep_hours, mood, energy, physical_symptoms, feeling_supported, anonymous)
+    VALUES (?,?,?,?,?,?,?,?,?)
     ON CONFLICT(personnel_id, date) DO UPDATE SET stress=excluded.stress, sleep_hours=excluded.sleep_hours,
-      mood=excluded.mood, physical_symptoms=excluded.physical_symptoms, feeling_supported=excluded.feeling_supported,
+      mood=excluded.mood, energy=excluded.energy, physical_symptoms=excluded.physical_symptoms, feeling_supported=excluded.feeling_supported,
       anonymous=0`)
-    .run(req.user.personnel_id, todayStr(), s, sl, String(mood || ''), physical_symptoms ? 1 : 0,
+    .run(req.user.personnel_id, todayStr(), s, sl, moodValue, en, physical_symptoms ? 1 : 0,
       Math.min(5, Math.max(1, Number(feeling_supported) || 3)), 0);
   runPipeline();
   send(res, 200, { ok: true });
 });
 
+const ASSESSMENT_SPECS = {
+  WHO5: { count: 5, maxAnswer: 5, maxScore: 100, label: 'WHO-5 Well-Being Index' },
+  PSS10: { count: 10, maxAnswer: 4, maxScore: 40, label: 'Perceived Stress Scale (PSS-10)' },
+  GAD7: { count: 7, maxAnswer: 3, maxScore: 21, label: 'GAD-7' },
+  PHQ9: { count: 9, maxAnswer: 3, maxScore: 27, label: 'PHQ-9' }
+};
+
+function assessmentView(row, includeAnswers = false) {
+  const spec = ASSESSMENT_SPECS[row.type] || { maxScore: 100, label: row.type };
+  let display = row.display_score;
+  let raw = row.raw_score;
+  // Legacy rows stored only a normalized support-direction value. Reconstruct a
+  // display value conservatively while preserving newly stored exact results.
+  if (display == null) display = row.type === 'WHO5'
+    ? 100 - Number(row.score || 0)
+    : Math.round(Number(row.score || 0) / 100 * spec.maxScore);
+  if (raw == null) raw = row.type === 'WHO5' ? Math.round(display / 4) : display;
+  const out = {
+    id: row.id, date: row.date, type: row.type, label: spec.label,
+    raw_score: Number(raw), display_score: Number(display), max_score: spec.maxScore,
+    level: row.level || '', urgent: !!row.urgent,
+    instrument_version: row.instrument_version || 'legacy-prototype',
+    disclaimer: 'Screening tool — not a diagnosis.'
+  };
+  if (includeAnswers) {
+    try { out.answers = JSON.parse(row.answers || '[]'); } catch { out.answers = []; }
+  }
+  return out;
+}
+
 app.post('/api/assessment', requireAuth(['personnel']), (req, res) => {
   const { type, answers } = req.body || {};
   if (!req.user.personnel_id) return send(res, 400, { error: 'No personnel record linked to this account' });
-  const spec = {
-    WHO5: { count: 5, maxAnswer: 5 },
-    PSS10: { count: 10, maxAnswer: 4 },
-    GAD7: { count: 7, maxAnswer: 3 },
-    PHQ9: { count: 9, maxAnswer: 3 }
-  }[type];
+  const spec = ASSESSMENT_SPECS[type];
   if (!spec) return send(res, 400, { error: 'Unknown assessment type' });
   if (!Array.isArray(answers) || answers.length !== spec.count ||
       answers.some(a => !Number.isInteger(Number(a)) || a < 0 || a > spec.maxAnswer))
@@ -342,8 +420,11 @@ app.post('/api/assessment', requireAuth(['personnel']), (req, res) => {
     guidance = urgent ? 'You indicated thoughts of self-harm or being better off dead. Please contact immediate support now and do not stay alone.'
       : raw >= 10 ? 'This screening result supports considering a conversation with a qualified health professional.' : 'Track changes over time and reach out if symptoms persist or worsen.';
   }
-  db.prepare('INSERT INTO assessments (personnel_id, date, type, score, answers) VALUES (?,?,?,?,?)')
-    .run(req.user.personnel_id, todayStr(), type, score, JSON.stringify(values));
+  db.prepare(`INSERT INTO assessments
+    (personnel_id, date, type, score, answers, raw_score, display_score, level, urgent, instrument_version)
+    VALUES (?,?,?,?,?,?,?,?,?,?)`)
+    .run(req.user.personnel_id, todayStr(), type, score, JSON.stringify(values), raw,
+      displayScore, level, urgent ? 1 : 0, 'prototype-v1');
   runPipeline();
   send(res, 200, { ok: true, type, raw, display_score: displayScore, risk_score: score, level, guidance, urgent });
 });
@@ -354,10 +435,11 @@ app.get('/api/my-status', requireAuth(['personnel']), (req, res) => {
   const today = todayStr();
   const d = gatherData(pid, today);
   const r = d ? computeRisk(d) : { score: 0, band: 'Low', factors: [] };
-  const mine = db.prepare(`SELECT date, stress, sleep_hours, mood, feeling_supported FROM checkins WHERE personnel_id = ? ORDER BY date DESC LIMIT 30`).all(pid);
+  const mine = db.prepare(`SELECT date, stress, sleep_hours, mood, energy, feeling_supported FROM checkins WHERE personnel_id = ? ORDER BY date DESC LIMIT 30`).all(pid);
   const accessed = db.prepare(`SELECT a.action, a.at, u.name AS actor, u.role FROM audit_log a
     JOIN users u ON u.id = a.actor_id WHERE a.target_personnel = ? ORDER BY a.at DESC LIMIT 10`).all(pid);
-  const asmts = db.prepare(`SELECT date, type, score FROM assessments WHERE personnel_id = ? ORDER BY date DESC, id DESC LIMIT 20`).all(pid);
+  const asmts = db.prepare(`SELECT * FROM assessments WHERE personnel_id = ? ORDER BY date DESC, id DESC LIMIT 20`).all(pid)
+    .map(row => assessmentView(row));
   const corrections = db.prepare(`SELECT id, category, message, created_at, status, resolution_note FROM data_corrections
     WHERE personnel_id = ? ORDER BY created_at DESC LIMIT 10`).all(pid);
   const workload = workloadFor(pid);
@@ -370,6 +452,178 @@ app.get('/api/my-status', requireAuth(['personnel']), (req, res) => {
     : orgPressure ? 'Work records show pressure, while your check-ins are steadier' : 'Your check-ins show more pressure than work records alone suggest';
   send(res, 200, { risk: { ...r, model: 'transparent rules prototype', updated_at: new Date().toISOString(), evidence_count: r.factors.length },
     checkins: mine.reverse(), accessed, assessments: asmts, workload, self_report: selfReport, comparison, corrections });
+});
+
+function periodDays(value) {
+  if (value === 'all') return null;
+  const n = Number(value);
+  return [7, 30, 90].includes(n) ? n : 30;
+}
+
+function numericSummary(rows, key, favorableHigh = false) {
+  const values = rows.map(row => Number(row[key])).filter(Number.isFinite);
+  if (!values.length) return { current: null, previous: null, change: null, direction: 'Not enough data' };
+  const split = Math.max(1, Math.floor(values.length / 2));
+  const older = values.slice(0, split), newer = values.slice(split);
+  const mean = list => list.length ? list.reduce((a, b) => a + b, 0) / list.length : null;
+  const current = +(mean(newer.length ? newer : older)).toFixed(1);
+  const previous = +(mean(older)).toFixed(1);
+  const change = +(current - previous).toFixed(1);
+  const threshold = key === 'sleep_hours' ? .25 : .2;
+  const improving = favorableHigh ? change > threshold : change < -threshold;
+  const worsening = favorableHigh ? change < -threshold : change > threshold;
+  return { current, previous, change, direction: improving ? 'Improving' : worsening ? 'Worth noticing' : 'Steady' };
+}
+
+function moodSummary(rows) {
+  const counts = new Map();
+  for (const row of rows) {
+    const mood = String(row.mood || '').trim();
+    if (mood) counts.set(mood, (counts.get(mood) || 0) + 1);
+  }
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+  return { current: rows.length ? rows[rows.length - 1].mood || null : null, most_common: top ? top[0] : null };
+}
+
+function checkinSummaries(rows) {
+  return {
+    stress: numericSummary(rows, 'stress'),
+    sleep: numericSummary(rows, 'sleep_hours', true),
+    mood: moodSummary(rows),
+    energy: numericSummary(rows, 'energy', true)
+  };
+}
+
+function latestSupportFor(pid) {
+  const row = db.prepare(`SELECT id, source, reason, priority, status, next_action, follow_up_due, created_at
+    FROM support_cases WHERE personnel_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`).get(pid);
+  return row ? { active: row.status !== 'Resolved', case_id: row.id, source: row.source, reason: row.reason,
+    priority: row.priority, status: row.status, next_action: row.next_action,
+    follow_up_due: row.follow_up_due, created_at: row.created_at } : { active: false };
+}
+
+function personalInsight(checkins, workload) {
+  const sleep = numericSummary(checkins, 'sleep_hours', true);
+  const stress = numericSummary(checkins, 'stress');
+  let text = 'Continue checking in to build a personal pattern over time.';
+  if (sleep.current != null && sleep.current < 6.5 && workload.overtime_hours >= 35)
+    text = 'Your recent sleep has been lower during a period with elevated recorded overtime.';
+  else if (stress.direction === 'Improving') text = 'Your recent stress check-ins are trending lower.';
+  else if (stress.direction === 'Worth noticing') text = 'Your recent stress check-ins have moved upward.';
+  else if (sleep.direction === 'Improving') text = 'Your recent sleep check-ins are trending upward.';
+  return {
+    text,
+    basis: [`${checkins.length} voluntary check-in${checkins.length === 1 ? '' : 's'}`, `${workload.records.length} recent work record${workload.records.length === 1 ? '' : 's'}`],
+    disclaimer: 'Personal observed pattern — not a diagnosis or proof of causation.'
+  };
+}
+
+app.get('/api/personnel/home', requireAuth(['personnel']), (req, res) => {
+  const pid = req.user.personnel_id;
+  const profile = db.prepare(`SELECT p.id,p.name,p.rank,p.force_id,u.name unit
+    FROM personnel p JOIN units u ON u.id=p.unit_id WHERE p.id=?`).get(pid);
+  if (!profile) return send(res, 404, { error: 'Personnel profile not found' });
+  const week = db.prepare(`SELECT date,stress,sleep_hours,mood,energy FROM checkins
+    WHERE personnel_id=? AND date>=? ORDER BY date`).all(pid, sinceDate(6));
+  const todayCheckin = week.find(row => row.date === todayStr()) || null;
+  const workload = workloadFor(pid);
+  const journals = db.prepare(`SELECT date,content,words,updated_at FROM journal_entries
+    WHERE personnel_id=? AND words>0 ORDER BY date DESC LIMIT 2`).all(pid)
+    .map(row => ({ date: row.date, words: row.words, updated_at: row.updated_at,
+      preview: String(row.content || '').replace(/\s+/g, ' ').trim().slice(0, 180) }));
+  const whoRow = db.prepare(`SELECT * FROM assessments WHERE personnel_id=? AND type='WHO5'
+    ORDER BY date DESC,id DESC LIMIT 1`).get(pid);
+  send(res, 200, {
+    profile,
+    privacy: { private_by_default: true, journal: 'Only you', promise: 'Your journal and journal insights are never shared with Welfare or Commander.' },
+    today_checkin: todayCheckin,
+    week: { series: week, summaries: checkinSummaries(week) },
+    insight: personalInsight(week, workload),
+    journal_preview: journals,
+    assessment: { recommended: { type: 'WHO5', label: 'Weekly wellbeing check', minutes: 1 },
+      latest_who5: whoRow ? assessmentView(whoRow) : null },
+    work_preview: { window_days: workload.window_days, overtime_hours: workload.overtime_hours,
+      deployment_starts: workload.deployment_starts, leave_denials: workload.leave_denials,
+      last_updated: workload.last_updated || null },
+    support: latestSupportFor(pid)
+  });
+});
+
+app.get('/api/personnel/assessments', requireAuth(['personnel']), (req, res) => {
+  const rows = db.prepare(`SELECT * FROM assessments WHERE personnel_id=? ORDER BY date DESC,id DESC`).all(req.user.personnel_id)
+    .map(row => assessmentView(row, true));
+  const byType = {};
+  for (const row of rows) (byType[row.type] ||= []).push(row);
+  send(res, 200, { history: rows, by_type: byType, disclaimer: 'Screening tools support reflection; they are not diagnoses.' });
+});
+
+app.get('/api/personnel/work-context', requireAuth(['personnel']), (req, res) => {
+  const pid = req.user.personnel_id;
+  const metrics = workloadFor(pid);
+  const corrections = db.prepare(`SELECT id,category,message,created_at,status,resolution_note FROM data_corrections
+    WHERE personnel_id=? ORDER BY created_at DESC`).all(pid);
+  send(res, 200, {
+    metrics,
+    records: metrics.records,
+    source: 'Simulated organizational HR and duty records',
+    last_updated: metrics.last_updated || null,
+    why: 'Used to identify workload, recovery and resourcing conditions and to give you visibility into the records held about you.',
+    corrections,
+    prototype: true
+  });
+});
+
+app.get('/api/personnel/progress', requireAuth(['personnel']), (req, res) => {
+  const pid = req.user.personnel_id;
+  const days = periodDays(req.query.days);
+  const start = days == null ? null : sinceDate(days - 1);
+  const where = start ? ' AND date>=?' : '';
+  const params = start ? [pid, start] : [pid];
+  const series = db.prepare(`SELECT date,stress,sleep_hours,mood,energy FROM checkins
+    WHERE personnel_id=?${where} ORDER BY date`).all(...params);
+  const assessmentRows = db.prepare(`SELECT * FROM assessments WHERE personnel_id=?${where} ORDER BY date,id`).all(...params)
+    .map(row => assessmentView(row));
+  const journalRows = db.prepare(`SELECT date,content,words,time_sec FROM journal_entries
+    WHERE personnel_id=?${where} AND words>0 ORDER BY date`).all(...params);
+  const topicCounts = new Map(), feelingCounts = new Map(), timeCounts = new Map();
+  for (const row of journalRows) {
+    const analysis = analyzeJournal(row.content);
+    for (const item of analysis.topics) topicCounts.set(item.label, (topicCounts.get(item.label) || 0) + item.count);
+    for (const item of analysis.feelings) feelingCounts.set(item.label, (feelingCounts.get(item.label) || 0) + item.count);
+    for (const item of analysis.time) timeCounts.set(item.label, (timeCounts.get(item.label) || 0) + item.count);
+  }
+  const ranked = map => [...map.entries()].filter(([, count]) => count > 0)
+    .sort((a, b) => b[1] - a[1]).map(([label, count]) => ({ label, count }));
+  const overtimeDates = new Set(db.prepare(`SELECT date FROM hr_events WHERE personnel_id=? AND type='duty_overtime'${where}`).all(...params).map(r => r.date));
+  const onLongDuty = series.filter(row => overtimeDates.has(row.date));
+  const otherDays = series.filter(row => !overtimeDates.has(row.date));
+  let relationshipText = 'Not enough overlapping check-in and duty data to estimate a work relationship yet.';
+  if (onLongDuty.length && otherDays.length >= 2) {
+    const dutySleep = avgNum(onLongDuty, 'sleep_hours'), otherSleep = avgNum(otherDays, 'sleep_hours');
+    relationshipText = dutySleep < otherSleep
+      ? `Recorded overtime days coincided with ${+(otherSleep - dutySleep).toFixed(1)} fewer hours of reported sleep on average.`
+      : 'Reported sleep was not lower on the recorded overtime days in this period.';
+  }
+  send(res, 200, {
+    days: days == null ? 'all' : days,
+    series,
+    summaries: checkinSummaries(series),
+    assessments: assessmentRows,
+    journal: {
+      entries: journalRows.length,
+      total_words: journalRows.reduce((sum, row) => sum + Number(row.words || 0), 0),
+      frequency: days && days > 0 ? +(journalRows.length / days * 7).toFixed(1) : null,
+      recurring_themes: ranked(topicCounts).slice(0, 5),
+      emotional_tone: ranked(feelingCounts).slice(0, 5),
+      time_orientation: ranked(timeCounts).slice(0, 3),
+      experimental: true
+    },
+    work_relationship: {
+      text: relationshipText,
+      basis: { overtime_days: onLongDuty.length, comparison_days: otherDays.length },
+      disclaimer: 'Observed association — not proof of causation.'
+    }
+  });
 });
 
 app.post('/api/my-data/correction', requireAuth(['personnel']), (req, res) => {
@@ -387,25 +641,14 @@ app.post('/api/my-data/correction', requireAuth(['personnel']), (req, res) => {
 
 /* ---------------- welfare officer: flagged roster ---------------- */
 app.get('/api/dashboard/roster', requireAuth(['welfare']), (req, res) => {
-  const today = todayStr();
-  const rows = db.prepare(`SELECT rs.score, rs.band, rs.factors, p.id, p.force_id, p.rank, p.name, u.name AS unit
-    FROM risk_scores rs JOIN personnel p ON p.id = rs.personnel_id JOIN units u ON u.id = p.unit_id
-    WHERE rs.date = ? AND rs.band IN ('Watch','Elevated','Critical')
-    ORDER BY CASE rs.band WHEN 'Critical' THEN 0 WHEN 'Elevated' THEN 1 ELSE 2 END, rs.score DESC`).all(today);
-  send(res, 200, { roster: rows.map(r => ({ ...r, factors: JSON.parse(r.factors) })) });
+  send(res, 410, { error: 'The support-priority roster was replaced by the sourced support queue' });
 });
 
 app.get('/api/welfare/overview', requireAuth(['welfare']), (req, res) => {
-  const today = todayStr();
-  const bands = Object.fromEntries(['Low','Watch','Elevated','Critical'].map(b => [b,
-    db.prepare('SELECT COUNT(*) c FROM risk_scores WHERE date=? AND band=?').get(today, b).c]));
-  const alerts = db.prepare(`SELECT status, COUNT(*) c FROM alerts GROUP BY status`).all();
-  const interventions = db.prepare(`SELECT status, COUNT(*) c FROM interventions GROUP BY status`).all();
-  const corrections = db.prepare(`SELECT d.id,d.category,d.message,d.created_at,d.status,p.id personnel_id,p.rank,p.name,p.force_id
-    FROM data_corrections d JOIN personnel p ON p.id=d.personnel_id WHERE d.status IN ('submitted','reviewing')
-    ORDER BY CASE d.status WHEN 'submitted' THEN 0 ELSE 1 END, d.created_at`).all();
-  send(res, 200, { bands, alerts: Object.fromEntries(alerts.map(x=>[x.status,x.c])),
-    interventions: Object.fromEntries(interventions.map(x=>[x.status,x.c])), corrections });
+  const rows = welfareCaseRows(req.user.id);
+  const payload = welfareQueuePayload(rows);
+  send(res, 200, { metrics: payload.metrics, queue: payload.cases.slice(0, 8),
+    prototype: { simulated_data: true, label: 'Prototype demonstration using simulated data' } });
 });
 
 app.post('/api/data-corrections/:id', requireAuth(['welfare']), (req, res) => {
@@ -421,19 +664,14 @@ app.post('/api/data-corrections/:id', requireAuth(['welfare']), (req, res) => {
   send(res, 200, { ok: true });
 });
 
-app.get('/api/personnel/:id', requireAuth(['welfare']), (req, res) => {
-  const p = db.prepare(`SELECT p.*, u.name AS unit FROM personnel p JOIN units u ON u.id = p.unit_id WHERE p.id = ?`).get(req.params.id);
-  if (!p) return send(res, 404, { error: 'Not found' });
-  audit(req.user, 'view_profile', p.id, req.query.justification || 'welfare review');
-  const today = todayStr();
-  const d = gatherData(p.id, today);
-  const risk = computeRisk(d);
-  const hr = db.prepare("SELECT * FROM hr_events WHERE personnel_id = ? AND type <> 'disciplinary' ORDER BY date DESC LIMIT 40").all(p.id);
-  const checkins = db.prepare('SELECT date, stress, sleep_hours, mood FROM checkins WHERE personnel_id = ? ORDER BY date ASC').all(p.id);
-  const history = db.prepare('SELECT date, score, band FROM risk_scores WHERE personnel_id = ? ORDER BY date ASC').all(p.id);
-  const interventions = db.prepare('SELECT * FROM interventions WHERE personnel_id = ? ORDER BY recommended_at DESC').all(p.id);
-  const alerts = db.prepare('SELECT * FROM alerts WHERE personnel_id = ? ORDER BY created_at DESC LIMIT 10').all(p.id);
-  send(res, 200, { personnel: p, risk, recommendations: recommend(risk.factors), hr, checkins, history, interventions, alerts });
+app.get('/api/personnel/:id/journal', requireAuth(), (_req, res) => {
+  send(res, 403, { error: 'Private journals are available only through the owner-scoped journal API' });
+});
+
+// Retired because it exposed a whole person record without proving an active,
+// assigned support purpose. Welfare clients must use the scoped case endpoint.
+app.get('/api/personnel/:id', requireAuth(['welfare']), (_req, res) => {
+  send(res, 410, { error: 'Use /api/welfare/cases/:id for consent-scoped case context' });
 });
 
 /* ---------------- private reflective journal (merged from seven50) ----------------
@@ -660,36 +898,646 @@ app.post('/api/recalculate', requireAuth(['welfare']), (req, res) => {
 /* ---------------- commander dashboard (aggregated + k-anonymized) ---------------- */
 const K_MIN = 5; // never expose a group smaller than 5 personnel
 
+function dateOffsetFrom(date, days) {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() - days);
+  return value.toISOString().slice(0, 10);
+}
+
+function conditionCell(value, status, explanation, display = null) {
+  return { value, display: display == null ? value : display, status, explanation };
+}
+
+function unitCondition(unit, asOf = todayStr()) {
+  const strength = db.prepare('SELECT COUNT(*) c FROM personnel WHERE unit_id=? AND active=1').get(unit.id).c;
+  const since90 = dateOffsetFrom(asOf, 89), since30 = dateOffsetFrom(asOf, 29);
+  const priorStart = dateOffsetFrom(asOf, 59), priorEnd = dateOffsetFrom(asOf, 30);
+  const work = db.prepare(`SELECT e.type,COUNT(*) c,COALESCE(SUM(e.value),0) total FROM hr_events e
+    JOIN personnel p ON p.id=e.personnel_id WHERE p.unit_id=? AND p.active=1 AND e.date BETWEEN ? AND ?
+    AND e.type IN ('duty_overtime','deployment','return_from_deployment','recovery_rest','leave_denied','leave_approved','incident_exposure','transfer','training')
+    GROUP BY e.type`).all(unit.id, since90, asOf);
+  const wm = Object.fromEntries(work.map(row => [row.type, row]));
+  const currentOt = db.prepare(`SELECT COALESCE(SUM(e.value),0) total FROM hr_events e JOIN personnel p ON p.id=e.personnel_id
+    WHERE p.unit_id=? AND p.active=1 AND e.type='duty_overtime' AND e.date BETWEEN ? AND ?`).get(unit.id, since30, asOf).total;
+  const priorOt = db.prepare(`SELECT COALESCE(SUM(e.value),0) total FROM hr_events e JOIN personnel p ON p.id=e.personnel_id
+    WHERE p.unit_id=? AND p.active=1 AND e.type='duty_overtime' AND e.date BETWEEN ? AND ?`).get(unit.id, priorStart, priorEnd).total;
+  const overtimeHours = Math.round(wm.duty_overtime?.total || 0);
+  const overtimePerPerson = +(overtimeHours / Math.max(1, strength)).toFixed(1);
+  const overtimeChange = priorOt > 0 ? +((currentOt - priorOt) / priorOt * 100).toFixed(1) : (currentOt > 0 ? 100 : 0);
+  const deployments = wm.deployment?.c || 0;
+  const recoveries = (wm.return_from_deployment?.c || 0) + (wm.recovery_rest?.c || 0);
+  const leaveDenials = wm.leave_denied?.c || 0;
+  const leavePressure = +(leaveDenials / Math.max(1, strength) * 100).toFixed(1);
+  const deploymentIntensity = +(deployments / Math.max(1, strength) * 100).toFixed(1);
+  const incidents = wm.incident_exposure?.c || 0;
+  const incidentRate = +(incidents / Math.max(1, strength) * 100).toFixed(1);
+  const recoveryScore = Math.max(0, Math.min(100, Math.round(88 - overtimePerPerson * .65 - Math.max(0, deployments - recoveries) * 3)));
+  const pulse = db.prepare(`SELECT COUNT(DISTINCT c.personnel_id) respondents,AVG(c.stress) stress,
+    AVG(c.sleep_hours) sleep,AVG(c.energy) energy FROM checkins c JOIN personnel p ON p.id=c.personnel_id
+    WHERE p.unit_id=? AND p.active=1 AND p.aggregate_consent=1 AND c.date BETWEEN ? AND ?`)
+    .get(unit.id, dateOffsetFrom(asOf, 13), asOf);
+  const pulseVisible = pulse.respondents >= K_MIN;
+  const voluntary = pulseVisible ? { respondents: pulse.respondents, avg_stress: +pulse.stress.toFixed(1),
+    avg_sleep: +pulse.sleep.toFixed(1), avg_energy: +pulse.energy.toFixed(1) }
+    : { respondents: pulse.respondents, avg_stress: null, avg_sleep: null, avg_energy: null, suppressed: true };
+  const dataCoverage = strength ? +(pulse.respondents / strength * 100).toFixed(0) : 0;
+  const metrics = {
+    overtime_hours: overtimeHours, overtime_per_person: overtimePerPerson, overtime_change_pct: overtimeChange,
+    leave_denials: leaveDenials, leave_pressure_pct: leavePressure,
+    deployments, deployment_intensity: deploymentIntensity,
+    incidents, incident_rate: incidentRate, transfers: wm.transfer?.c || 0,
+    training_days: Math.round(wm.training?.total || 0), recoveries, recovery_score: recoveryScore,
+    available_signals: 5 + (pulseVisible ? 1 : 0), possible_signals: 6
+  };
+  const early = computeEarlyIndicator(metrics);
+  const heatmap = {
+    overtime: conditionCell(overtimePerPerson, overtimePerPerson >= 40 ? 'High' : overtimePerPerson >= 25 ? 'Monitor' : 'Normal',
+      `${overtimeHours} overtime hours across ${strength} active personnel`, `${overtimePerPerson}h/person`),
+    leave_pressure: conditionCell(leavePressure, leavePressure >= 15 ? 'High' : leavePressure >= 8 ? 'Monitor' : 'Normal',
+      `${leaveDenials} denied leave requests in 90 days`, `${leavePressure}%`),
+    recovery: conditionCell(recoveryScore, recoveryScore < 55 ? 'High' : recoveryScore < 75 ? 'Monitor' : 'Normal',
+      'Transparent proxy derived from overtime and recorded recovery opportunities', `${recoveryScore}/100`),
+    deployment: conditionCell(deploymentIntensity, deploymentIntensity >= 20 ? 'High' : deploymentIntensity >= 10 ? 'Monitor' : 'Normal',
+      `${deployments} deployment starts in 90 days`, `${deploymentIntensity}/100 personnel`),
+    incidents: conditionCell(incidentRate, incidentRate >= 5 ? 'High' : incidentRate > 0 ? 'Monitor' : 'Normal',
+      `${incidents} incident exposures in 90 days`, `${incidentRate}/100 personnel`),
+    voluntary_wellbeing: pulseVisible
+      ? conditionCell(voluntary.avg_stress, voluntary.avg_stress >= 7 ? 'High' : voluntary.avg_stress >= 5.5 ? 'Monitor' : 'Normal',
+        `Aggregate of ${pulse.respondents} consenting contributors; no individual responses`, `${voluntary.avg_stress}/10 stress`)
+      : conditionCell(null, 'Monitor', `Suppressed: ${pulse.respondents}/${K_MIN} minimum consenting contributors`, 'Not displayed'),
+    data_coverage: conditionCell(dataCoverage, pulseVisible ? 'Normal' : 'Monitor',
+      `${pulse.respondents}/${strength} personnel contributed consented voluntary data`, `${pulse.respondents}/${strength}`)
+  };
+  return {
+    unit_id: unit.id, unit: unit.name, region: unit.region, strength,
+    condition: early.level === 'High' ? 'High load' : early.level === 'Monitor' ? 'Monitor' : 'Normal',
+    metrics, heatmap, early_indicator: early,
+    workload: { overtime_hours: overtimeHours, overtime_per_person: overtimePerPerson,
+      deployments, leave_denials: leaveDenials, incidents, transfers: metrics.transfers,
+      training_days: metrics.training_days, recovery_score: recoveryScore },
+    pulse: voluntary
+  };
+}
+
+function actionView(row, unitMap) {
+  const unit = unitMap.get(row.unit_id);
+  return {
+    id: row.id, unit_id: row.unit_id, unit: unit ? unit.unit : row.unit,
+    title: row.title, issue: row.title, evidence: row.evidence,
+    suggested_response: row.suggested_response || row.title, owner: row.owner,
+    status: row.status, review_date: row.review_date || null,
+    before: { overtime_per_person: row.baseline_overtime, recovery: row.baseline_recovery ?? null,
+      condition: row.baseline_condition || null, avg_sleep: row.baseline_sleep ?? null },
+    after: row.after_overtime == null && row.after_recovery == null ? null : {
+      overtime_per_person: row.after_overtime, recovery: row.after_recovery,
+      condition: row.after_condition || null
+    },
+    outcome: row.outcome || null, started_at: row.started_at,
+    reviewed_at: row.reviewed_at || null, simulated: !!row.simulated
+  };
+}
+
+function commanderOverview() {
+  const units = db.prepare('SELECT * FROM units ORDER BY name').all().map(unit => unitCondition(unit));
+  const unitMap = new Map(units.map(unit => [unit.unit_id, unit]));
+  const actions = db.prepare(`SELECT a.*,u.name unit FROM org_actions a LEFT JOIN units u ON u.id=a.unit_id
+    ORDER BY CASE a.status WHEN 'Review due' THEN 0 WHEN 'In progress' THEN 1 WHEN 'Planned' THEN 2 ELSE 3 END,a.started_at DESC`).all()
+    .map(row => actionView(row, unitMap));
+  const generated = [];
+  if (!actions.length) for (const unit of units.filter(item => item.condition !== 'Normal').slice(0, 3)) {
+    const contributor = unit.early_indicator.contributors[0];
+    generated.push({ id: null, unit_id: unit.unit_id, unit: unit.unit,
+      title: contributor?.key === 'leave_pressure' ? 'Review leave constraints' : 'Review duty roster and recovery time',
+      issue: contributor?.label || 'Organizational pressure', evidence: contributor?.detail || 'Multiple workload signals',
+      suggested_response: 'Review rotation, recovery opportunity and available staffing with local operations.',
+      owner: 'Operations', status: 'Suggested', review_date: null, before: null, after: null, outcome: null });
+  }
+  const trend = [];
+  for (let offset = 29; offset >= 0; offset--) {
+    const date = dateOffsetFrom(todayStr(), offset);
+    const dayUnits = db.prepare('SELECT * FROM units ORDER BY id').all().map(unit => unitCondition(unit, date));
+    trend.push({ date, high_load_units: dayUnits.filter(unit => unit.condition === 'High load').length,
+      monitor_units: dayUnits.filter(unit => unit.condition === 'Monitor').length,
+      overtime_hours: dayUnits.reduce((sum, unit) => sum + unit.workload.overtime_hours, 0) });
+  }
+  const totals = units.reduce((out, unit) => {
+    for (const key of ['overtime_hours', 'deployments', 'leave_denials', 'incidents', 'transfers', 'training_days'])
+      out[key] += unit.workload[key] || 0;
+    return out;
+  }, { overtime_hours: 0, deployments: 0, leave_denials: 0, incidents: 0, transfers: 0, training_days: 0 });
+  return {
+    units,
+    heatmap: units.map(unit => ({ unit_id: unit.unit_id, unit: unit.unit, region: unit.region,
+      condition: unit.condition, cells: unit.heatmap })),
+    early_indicators: units.map(unit => ({ unit_id: unit.unit_id, unit: unit.unit, ...unit.early_indicator }))
+      .sort((a, b) => ({ High: 0, Monitor: 1, Normal: 2 })[a.level] - ({ High: 0, Monitor: 1, Normal: 2 })[b.level]),
+    priority_actions: actions.length ? actions : generated,
+    actions: actions.length ? actions : generated,
+    outcomes: actions.filter(action => action.after || action.outcome),
+    trend,
+    totals,
+    privacy: { k_min: K_MIN, consent_required: true,
+      note: 'Voluntary wellbeing is included only for consenting groups of at least five. No names, journals, assessments, or case records are returned.' },
+    prototype: { simulated_data: true, label: 'Prototype demonstration using simulated data',
+      method: 'Transparent deterministic seven-day organizational indicator; no probability or accuracy claim.' }
+  };
+}
+
 app.get('/api/dashboard/unit', requireAuth(['commander']), (req, res) => {
-  const today = todayStr();
-  const units = db.prepare('SELECT * FROM units').all();
-  const out = units.map(u => {
-    const strength = db.prepare('SELECT COUNT(*) c FROM personnel WHERE unit_id = ? AND active = 1').get(u.id).c;
-    const pulse = db.prepare(`SELECT COUNT(DISTINCT c.personnel_id) respondents, AVG(stress) stress, AVG(sleep_hours) sleep
-      FROM checkins c JOIN personnel p ON p.id = c.personnel_id WHERE p.unit_id = ? AND c.date >= ?`).get(u.id, sinceDate(14));
-    const work = db.prepare(`SELECT e.type, COUNT(*) c, COALESCE(SUM(e.value),0) total FROM hr_events e
-      JOIN personnel p ON p.id=e.personnel_id WHERE p.unit_id=? AND e.date>=? AND e.type IN
-      ('duty_overtime','deployment','leave_denied','incident_exposure','transfer','training') GROUP BY e.type`).all(u.id, sinceDate(90));
-    const wm = Object.fromEntries(work.map(x=>[x.type,x]));
-    return { unit: u.name, region: u.region, strength,
-      pulse: pulse.respondents >= K_MIN ? { respondents:pulse.respondents, avg_stress:+pulse.stress.toFixed(1), avg_sleep:+pulse.sleep.toFixed(1) }
-        : { respondents:pulse.respondents, avg_stress:null, avg_sleep:null, suppressed:true },
-      workload: { overtime_hours:Math.round(wm.duty_overtime?.total||0), overtime_per_person:+((wm.duty_overtime?.total||0)/Math.max(strength,1)).toFixed(1), deployments:wm.deployment?.c||0,
-        leave_denials:wm.leave_denied?.c||0, incidents:wm.incident_exposure?.c||0, transfers:wm.transfer?.c||0,
-        training_days:Math.round(wm.training?.total||0) } };
+  send(res, 200, commanderOverview());
+});
+
+app.get('/api/commander/overview', requireAuth(['commander']), (_req, res) => {
+  send(res, 200, commanderOverview());
+});
+
+const ORG_ACTION_STATUSES = ['Planned', 'In progress', 'Review due', 'Improving', 'No improvement', 'Completed'];
+const ORG_ACTION_TRANSITIONS = {
+  Planned: ['In progress'],
+  'In progress': ['Review due', 'Completed'],
+  'Review due': ['In progress', 'Improving', 'No improvement', 'Completed'],
+  Improving: ['Completed', 'In progress'],
+  'No improvement': ['In progress', 'Completed'],
+  Completed: []
+};
+
+function addOrgActionEvent(actionId, actorId, eventType, detail) {
+  db.prepare(`INSERT INTO org_action_events(action_id,actor_id,event_type,detail,at) VALUES (?,?,?,?,?)`)
+    .run(actionId, actorId || null, eventType, String(detail || '').slice(0, 1000), new Date().toISOString());
+}
+
+function singleActionView(id) {
+  const row = db.prepare(`SELECT a.*,u.name unit FROM org_actions a LEFT JOIN units u ON u.id=a.unit_id WHERE a.id=?`).get(id);
+  if (!row) return null;
+  const condition = unitCondition(db.prepare('SELECT * FROM units WHERE id=?').get(row.unit_id));
+  const view = actionView(row, new Map([[row.unit_id, condition]]));
+  view.timeline = db.prepare(`SELECT e.event_type,e.detail,e.at,u.name actor FROM org_action_events e
+    LEFT JOIN users u ON u.id=e.actor_id WHERE e.action_id=? ORDER BY e.at,e.id`).all(id);
+  return view;
+}
+
+app.post('/api/commander/actions', requireAuth(['commander']), (req, res) => {
+  const b = req.body || {};
+  const unit = db.prepare('SELECT * FROM units WHERE id=?').get(Number(b.unit_id));
+  if (!unit) return send(res, 400, { error: 'Choose a valid unit' });
+  const title = String(b.title || '').trim(), evidence = String(b.evidence || '').trim();
+  const response = String(b.suggested_response || '').trim(), owner = String(b.owner || '').trim();
+  const reviewDate = String(b.review_date || '').trim();
+  if (title.length < 3 || title.length > 120) return send(res, 400, { error: 'Title must be 3–120 characters' });
+  if (evidence.length < 3 || evidence.length > 1000) return send(res, 400, { error: 'Add concise supporting evidence' });
+  if (response.length < 3 || response.length > 1000) return send(res, 400, { error: 'Add a suggested organizational response' });
+  if (owner.length < 2 || owner.length > 100) return send(res, 400, { error: 'Add an action owner' });
+  if (!validDate(reviewDate)) return send(res, 400, { error: 'Add a valid review date' });
+  const baseline = unitCondition(unit);
+  const now = new Date().toISOString();
+  const id = inTransaction(() => {
+    const actionId = Number(db.prepare(`INSERT INTO org_actions
+      (unit_id,title,evidence,suggested_response,owner,status,baseline_overtime,baseline_sleep,
+       baseline_recovery,baseline_condition,started_at,review_date,created_by,updated_at)
+      VALUES (?,?,?,?,?,'Planned',?,?,?,?,?,?,?,?)`)
+      .run(unit.id, title, evidence, response, owner, baseline.workload.overtime_per_person,
+        baseline.pulse.avg_sleep, baseline.metrics.recovery_score, baseline.condition, now,
+        reviewDate, req.user.id, now).lastInsertRowid);
+    addOrgActionEvent(actionId, req.user.id, 'action_created', title);
+    audit(req.user, 'org_action_created', null, `Action #${actionId}; ${unit.name}`);
+    return actionId;
   });
-  const trend = db.prepare(`SELECT date, AVG(score) a, SUM(CASE WHEN band IN ('Elevated','Critical') THEN 1 ELSE 0 END) flagged
-    FROM risk_scores WHERE date >= ? GROUP BY date ORDER BY date`).all(new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
-  const totals = out.reduce((a,u)=>{for(const k of Object.keys(a))a[k]+=u.workload[k]||0;return a;},
-    {overtime_hours:0,deployments:0,leave_denials:0,incidents:0,transfers:0,training_days:0});
-  const actions = [];
-  const highOt = [...out].sort((a,b)=>b.workload.overtime_per_person-a.workload.overtime_per_person)[0];
-  if (highOt && highOt.workload.overtime_hours) actions.push({ domain:'Demand', unit:highOt.unit, action:'Review duty roster and recovery time', evidence:`${highOt.workload.overtime_per_person} overtime hours per active person in 90 days (${highOt.workload.overtime_hours} total)` });
-  const highLeave = [...out].sort((a,b)=>(b.workload.leave_denials/b.strength)-(a.workload.leave_denials/a.strength))[0];
-  if (highLeave && highLeave.workload.leave_denials) actions.push({ domain:'Support', unit:highLeave.unit, action:'Review leave constraints and family-contact opportunities', evidence:`${highLeave.workload.leave_denials} leave denials recorded in 90 days` });
-  const highInc = [...out].sort((a,b)=>b.workload.incidents-a.workload.incidents)[0];
-  if (highInc && highInc.workload.incidents) actions.push({ domain:'Support', unit:highInc.unit, action:'Confirm post-incident decompression and voluntary support', evidence:`${highInc.workload.incidents} incident exposures recorded in 90 days` });
-  send(res, 200, { units: out, totals, actions, trend, privacy:{k_min:K_MIN, note:'Pulse values are suppressed below five respondents; commanders receive no individual wellbeing records.'} });
+  send(res, 201, { ok: true, action: singleActionView(id) });
+});
+
+function updateOrgAction(req, res) {
+  const current = db.prepare('SELECT * FROM org_actions WHERE id=?').get(req.params.id);
+  if (!current) return send(res, 404, { error: 'Organizational action not found' });
+  const b = req.body || {}, updates = {};
+  if (b.status !== undefined) {
+    if (!ORG_ACTION_STATUSES.includes(b.status)) return send(res, 400, { error: 'Invalid action status' });
+    if (b.status !== current.status && !(ORG_ACTION_TRANSITIONS[current.status] || []).includes(b.status))
+      return send(res, 409, { error: `Cannot move a ${current.status} action to ${b.status}` });
+    updates.status = b.status;
+  }
+  for (const [key, max] of [['title',120],['evidence',1000],['suggested_response',1000],['owner',100]]) {
+    if (b[key] !== undefined) {
+      const value = String(b[key] || '').trim();
+      if (value.length < 2 || value.length > max) return send(res, 400, { error: `Invalid ${key.replace(/_/g, ' ')}` });
+      updates[key] = value;
+    }
+  }
+  if (b.review_date !== undefined) {
+    if (!validDate(b.review_date)) return send(res, 400, { error: 'Invalid review date' });
+    updates.review_date = b.review_date;
+  }
+  const keys = Object.keys(updates);
+  if (!keys.length) return send(res, 400, { error: 'No action update supplied' });
+  updates.updated_at = new Date().toISOString();
+  inTransaction(() => {
+    const allKeys = Object.keys(updates);
+    db.prepare(`UPDATE org_actions SET ${allKeys.map(key => `${key}=?`).join(',')} WHERE id=?`)
+      .run(...allKeys.map(key => updates[key]), current.id);
+    if (updates.status && updates.status !== current.status)
+      addOrgActionEvent(current.id, req.user.id, 'status_changed', `${current.status} → ${updates.status}`);
+    else addOrgActionEvent(current.id, req.user.id, 'details_updated', 'Action details updated');
+    audit(req.user, 'org_action_updated', null, `Action #${current.id}`);
+  });
+  send(res, 200, { ok: true, action: singleActionView(current.id) });
+}
+
+app.post('/api/commander/actions/:id', requireAuth(['commander']), updateOrgAction);
+app.patch('/api/commander/actions/:id', requireAuth(['commander']), updateOrgAction);
+
+app.post('/api/commander/actions/:id/advance-demo', requireAuth(['commander']), (req, res) => {
+  const current = db.prepare('SELECT * FROM org_actions WHERE id=?').get(req.params.id);
+  if (!current) return send(res, 404, { error: 'Organizational action not found' });
+  if (current.status === 'Completed') return send(res, 409, { error: 'A completed action cannot be advanced' });
+  const beforeOt = Number(current.baseline_overtime) || 0;
+  const beforeRecovery = Number(current.baseline_recovery) || 60;
+  const afterOt = +(beforeOt * .79).toFixed(1);
+  const afterRecovery = Math.min(100, Math.round(beforeRecovery + 12));
+  const afterCondition = current.baseline_condition === 'High load' ? 'Monitor' : 'Normal';
+  const outcome = `After the simulated 14-day review, overtime decreased from ${beforeOt.toFixed(1)} to ${afterOt.toFixed(1)} hours per person and the recovery proxy improved.`;
+  const now = new Date().toISOString();
+  inTransaction(() => {
+    db.prepare(`UPDATE org_actions SET status='Improving',after_overtime=?,after_recovery=?,after_condition=?,
+      outcome=?,reviewed_at=?,updated_at=?,simulated=1 WHERE id=?`)
+      .run(afterOt, afterRecovery, afterCondition, outcome, now, now, current.id);
+    addOrgActionEvent(current.id, req.user.id, 'demo_outcome_recorded', 'Simulated 14-day follow-up measurement');
+    audit(req.user, 'org_action_demo_advanced', null, `Action #${current.id}; simulated outcome`);
+  });
+  send(res, 200, { ok: true, simulated: true,
+    label: 'Prototype demonstration using simulated follow-up data', action: singleActionView(current.id) });
+});
+
+/* ---------------- support cases: legitimate workflows only ---------------- */
+const CASE_REASONS = ['work_pressure', 'personal_difficulty', 'family', 'health', 'post_incident', 'other'];
+const CASE_STATUSES = ['New', 'Contacted', 'In support', 'Monitoring', 'Resolved'];
+const CASE_PRIORITIES = ['Urgent', 'High', 'Routine'];
+const CASE_TRANSITIONS = {
+  New: ['Contacted', 'Resolved'],
+  Contacted: ['In support', 'Monitoring', 'Resolved'],
+  'In support': ['Monitoring', 'Resolved'],
+  Monitoring: ['In support', 'Resolved'],
+  Resolved: []
+};
+const SHARE_KEYS = ['stress_trend', 'sleep_trend', 'who5', 'assessment_history', 'work_context'];
+
+function inTransaction(work) {
+  db.exec('BEGIN IMMEDIATE');
+  try { const value = work(); db.exec('COMMIT'); return value; }
+  catch (error) { try { db.exec('ROLLBACK'); } catch {} throw error; }
+}
+
+function safeJson(textValue, fallback = {}) {
+  try { return JSON.parse(textValue || ''); } catch { return fallback; }
+}
+
+function validDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function selectedShareFields(raw) {
+  if (raw == null) return Object.fromEntries(SHARE_KEYS.map(key => [key, false]));
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('shared_context must be an object');
+  const keys = Object.keys(raw);
+  if (keys.some(key => !SHARE_KEYS.includes(key)) || keys.some(key => /journal|reflection|transcript|voice|content/i.test(key)))
+    throw new Error('Only the listed share options are allowed; private journal data can never be shared');
+  for (const key of keys) if (typeof raw[key] !== 'boolean') throw new Error(`${key} must be true or false`);
+  return Object.fromEntries(SHARE_KEYS.map(key => [key, raw[key] === true]));
+}
+
+function buildSharedSnapshot(pid, selected, options = {}) {
+  const snapshot = {};
+  const recent = db.prepare(`SELECT date,stress,sleep_hours,mood,energy FROM checkins
+    WHERE personnel_id=? ORDER BY date DESC LIMIT 30`).all(pid).reverse();
+  if (selected.stress_trend) snapshot.stress_trend = {
+    series: recent.map(row => ({ date: row.date, stress: row.stress })),
+    summary: numericSummary(recent, 'stress')
+  };
+  if (selected.sleep_trend) snapshot.sleep_trend = {
+    series: recent.map(row => ({ date: row.date, sleep_hours: row.sleep_hours })),
+    summary: numericSummary(recent, 'sleep_hours', true)
+  };
+  if (selected.who5) {
+    const row = db.prepare(`SELECT * FROM assessments WHERE personnel_id=? AND type='WHO5'
+      ORDER BY date DESC,id DESC LIMIT 1`).get(pid);
+    snapshot.who5 = row ? assessmentView(row) : null;
+  }
+  if (selected.assessment_history) {
+    snapshot.assessment_history = db.prepare(`SELECT * FROM assessments WHERE personnel_id=?
+      ORDER BY date DESC,id DESC LIMIT 20`).all(pid).map(row => assessmentView(row));
+  }
+  if (selected.work_context || options.policyWorkContext) {
+    const work = workloadFor(pid);
+    snapshot.work_context = {
+      window_days: work.window_days, overtime_hours: work.overtime_hours,
+      deployment_starts: work.deployment_starts, leave_denials: work.leave_denials,
+      incident_exposures: work.incident_exposures, recovery_events: work.recovery_events,
+      source: 'Simulated organizational HR and duty records',
+      policy_authorized: !!options.policyWorkContext
+    };
+  }
+  return {
+    selected,
+    granted_at: new Date().toISOString(),
+    granted_by: options.policyWorkContext ? 'institutional_demo_policy' : 'personnel',
+    snapshot,
+    journal: { shared: false, reason: 'Private journal data is never shareable' }
+  };
+}
+
+function assignedWelfareOfficer() {
+  return db.prepare(`SELECT u.id FROM users u WHERE u.role='welfare' ORDER BY
+    (SELECT COUNT(*) FROM support_cases c WHERE c.assigned_officer_id=u.id AND c.status<>'Resolved'),u.id LIMIT 1`).get();
+}
+
+function addCaseEvent(caseId, actorId, eventType, detail) {
+  db.prepare(`INSERT INTO case_events(case_id,actor_id,event_type,detail,at) VALUES (?,?,?,?,?)`)
+    .run(caseId, actorId || null, eventType, String(detail || '').slice(0, 1000), new Date().toISOString());
+}
+
+function canAccessCase(user, row) {
+  return user && user.role === 'welfare' && (row.assigned_officer_id == null || Number(row.assigned_officer_id) === Number(user.id));
+}
+
+function supportSourceLabel(source) {
+  const labels = {
+    self_request: 'Personnel support request', personnel_request: 'Personnel support request',
+    predictive_indicator: 'Predictive early indicator', post_incident: 'Post-incident follow-up',
+    welfare_followup: 'Scheduled welfare review', referral: 'Referral', data_review: 'Data-review escalation'
+  };
+  return labels[source] || source || 'Authorized welfare workflow';
+}
+
+app.post('/api/support/request', requireAuth(['personnel']), (req, res) => {
+  const pid = req.user.personnel_id;
+  if (!pid) return send(res, 400, { error: 'No personnel record linked' });
+  const b = req.body || {};
+  const reason = String(b.reason || '').trim();
+  const details = String(b.details || '').trim();
+  if (!CASE_REASONS.includes(reason)) return send(res, 400, { error: 'Choose a reason for the request' });
+  if (details.length > 2000) return send(res, 400, { error: 'Keep details under 2000 characters' });
+  let selected;
+  try { selected = selectedShareFields(b.shared_context); }
+  catch (error) { return send(res, 400, { error: error.message }); }
+  const priority = ['post_incident', 'health'].includes(reason) ? 'High' : 'Routine';
+  const open = db.prepare(`SELECT id FROM support_cases WHERE personnel_id = ? AND status != 'Resolved'`).get(pid);
+  if (open) return send(res, 409, { error: 'You already have an active support case', case_id: open.id });
+  const officer = assignedWelfareOfficer();
+  if (!officer) return send(res, 503, { error: 'No Welfare officer is currently configured' });
+  const shared = buildSharedSnapshot(pid, selected);
+  const id = inTransaction(() => {
+    const caseId = Number(db.prepare(`INSERT INTO support_cases
+      (personnel_id, source, reason, details, priority, status, next_action, created_at, shared_context, assigned_officer_id)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`)
+      .run(pid, 'personnel_request', reason, details, priority, 'New', 'Welfare officer to make initial contact',
+        new Date().toISOString(), JSON.stringify(shared), officer.id).lastInsertRowid);
+    addCaseEvent(caseId, req.user.id, 'case_created', 'Personnel requested support');
+    if (Object.values(selected).some(Boolean)) addCaseEvent(caseId, req.user.id, 'context_shared', SHARE_KEYS.filter(key => selected[key]).join(', '));
+    db.prepare('UPDATE personnel SET welfare_share = ? WHERE id = ?').run(Object.values(selected).some(Boolean) ? 1 : 0, pid);
+    audit(req.user, 'support_case_opened', pid, `Case #${caseId}; ${reason}`);
+    return caseId;
+  });
+  send(res, 200, { ok: true, case_id: id });
+});
+
+app.get('/api/my-support', requireAuth(['personnel']), (req, res) => {
+  const pid = req.user.personnel_id;
+  if (!pid) return send(res, 400, { error: 'No personnel record linked' });
+  const cases = db.prepare(`SELECT id,source,reason,priority,status,next_action,follow_up_due,created_at,resolved_at,shared_context
+    FROM support_cases WHERE personnel_id = ? ORDER BY created_at DESC,id DESC LIMIT 10`).all(pid).map(row => {
+      const share = safeJson(row.shared_context, {});
+      const timeline = db.prepare(`SELECT event_type,detail,at FROM case_events WHERE case_id=? ORDER BY at,id`).all(row.id);
+      return { ...row, source: supportSourceLabel(row.source), shared_context: undefined,
+        shared_fields: SHARE_KEYS.filter(key => share.selected && share.selected[key]),
+        sharing_withdrawn_at: share.withdrawn_at || null, timeline };
+    });
+  const share = db.prepare('SELECT welfare_share, aggregate_consent FROM personnel WHERE id = ?').get(pid);
+  send(res, 200, { cases,
+    welfare_share: cases.some(row => row.status !== 'Resolved' && row.shared_fields.length > 0),
+    aggregate_consent: !!share.aggregate_consent });
+});
+
+app.post('/api/support/:id/withdraw-sharing', requireAuth(['personnel']), (req, res) => {
+  const row = db.prepare(`SELECT * FROM support_cases WHERE id=? AND personnel_id=?`).get(req.params.id, req.user.personnel_id);
+  if (!row) return send(res, 404, { error: 'Support case not found' });
+  const share = safeJson(row.shared_context, {});
+  share.selected = Object.fromEntries(SHARE_KEYS.map(key => [key, false]));
+  share.snapshot = {};
+  share.withdrawn_at = new Date().toISOString();
+  inTransaction(() => {
+    db.prepare('UPDATE support_cases SET shared_context=? WHERE id=?').run(JSON.stringify(share), row.id);
+    db.prepare('UPDATE personnel SET welfare_share=0 WHERE id=?').run(row.personnel_id);
+    addCaseEvent(row.id, req.user.id, 'sharing_withdrawn', 'Personnel withdrew optional shared context');
+    audit(req.user, 'support_sharing_withdrawn', row.personnel_id, `Case #${row.id}`);
+  });
+  send(res, 200, { ok: true, case_id: row.id });
+});
+
+app.post('/api/my-consent', requireAuth(['personnel']), (req, res) => {
+  const pid = req.user.personnel_id;
+  if (!pid) return send(res, 400, { error: 'No personnel record linked' });
+  const aggregate = req.body && req.body.aggregate_consent ? 1 : 0;
+  db.prepare('UPDATE personnel SET aggregate_consent = ? WHERE id = ?').run(aggregate, pid);
+  audit(req.user, aggregate ? 'consent_aggregate_on' : 'consent_aggregate_off', pid, 'Privacy center');
+  send(res, 200, { ok: true, aggregate_consent: !!aggregate });
+});
+
+app.get('/api/my-privacy', requireAuth(['personnel']), (req, res) => {
+  const pid = req.user.personnel_id;
+  if (!pid) return send(res, 400, { error: 'No personnel record linked' });
+  const accesses = db.prepare(`SELECT a.action, a.at, u.name AS actor, u.role FROM audit_log a
+    JOIN users u ON u.id = a.actor_id WHERE a.target_personnel = ? ORDER BY a.at DESC LIMIT 20`).all(pid);
+  const journalTouches = db.prepare(`SELECT COUNT(*) c FROM audit_log a WHERE a.target_personnel = ?
+    AND (a.action LIKE '%journal%' OR a.action LIKE '%analysis%')`).get(pid).c;
+  const share = db.prepare('SELECT welfare_share, aggregate_consent FROM personnel WHERE id = ?').get(pid);
+  const activeShares = db.prepare(`SELECT id,shared_context FROM support_cases WHERE personnel_id=? AND status<>'Resolved'`).all(pid)
+    .map(row => ({ case_id: row.id, fields: SHARE_KEYS.filter(key => safeJson(row.shared_context, {}).selected?.[key]) }));
+  send(res, 200, {
+    accesses, journal_touches: journalTouches,
+    welfare_share: activeShares.some(item => item.fields.length), active_shares: activeShares,
+    aggregate_consent: !!share.aggregate_consent,
+    workload: workloadFor(pid),
+    matrix: {
+      journal: { personnel: 'only you', welfare: 'never', commander: 'never' },
+      checkins: { personnel: 'only you', welfare: 'only fields selected for a case', commander: 'consented aggregate only when at least five respond' },
+      assessments: { personnel: 'only you', welfare: 'only results selected for a case; never answers', commander: 'never individual' },
+      support_case: { personnel: 'yours', welfare: 'assigned officer', commander: 'never' },
+      work_records: { personnel: 'your own', welfare: 'selected or policy-authorized case summary', commander: 'unit aggregate' }
+    },
+    data_classes: [
+      { key: 'private_journal', visibility: 'Personnel only' },
+      { key: 'voluntary_wellbeing', visibility: 'Private by default; explicit case share or consented aggregate' },
+      { key: 'organizational_work', visibility: 'Role-minimized official context' },
+      { key: 'support_case', visibility: 'Personnel and assigned Welfare officer' }
+    ]
+  });
+});
+
+/* ---------------- welfare: support case queue & workflow ---------------- */
+function welfareCaseRows(officerId) {
+  return db.prepare(`SELECT c.*,p.rank,p.name,p.force_id,u.name unit,ao.name assigned_officer
+    FROM support_cases c JOIN personnel p ON p.id=c.personnel_id
+    LEFT JOIN units u ON u.id=p.unit_id LEFT JOIN users ao ON ao.id=c.assigned_officer_id
+    WHERE c.assigned_officer_id=? OR c.assigned_officer_id IS NULL ORDER BY
+    CASE c.priority WHEN 'Urgent' THEN 0 WHEN 'High' THEN 1 ELSE 2 END,
+    CASE c.status WHEN 'New' THEN 0 WHEN 'Contacted' THEN 1 WHEN 'In support' THEN 2 WHEN 'Monitoring' THEN 3 ELSE 4 END,
+    COALESCE(c.follow_up_due,'9999-12-31'),c.created_at`).all(officerId).map(row => {
+      const share = safeJson(row.shared_context, {});
+      return { id: row.id, personnel_id: row.personnel_id, case_id: `CASE #${row.id}`,
+        rank: row.rank, name: row.name, force_id: row.force_id, unit: row.unit,
+        source: supportSourceLabel(row.source), source_key: row.source, reason: row.reason,
+        priority: row.priority, status: row.status, assigned_officer: row.assigned_officer,
+        shared_fields: SHARE_KEYS.filter(key => share.selected?.[key]), last_contact_at: row.last_contact_at,
+        first_response_at: row.first_response_at, next_action: row.next_action,
+        follow_up_due: row.follow_up_due, created_at: row.created_at, resolved_at: row.resolved_at };
+    });
+}
+
+function welfareQueuePayload(rows) {
+  const today = todayStr();
+  const open = rows.filter(row => row.status !== 'Resolved');
+  return { cases: rows, metrics: {
+    open: open.length,
+    needs_attention: open.filter(row => row.priority === 'Urgent' || row.priority === 'High').length,
+    overdue_follow_ups: open.filter(row => row.follow_up_due && row.follow_up_due < today).length,
+    awaiting_response: open.filter(row => row.status === 'Contacted').length
+  } };
+}
+
+app.get('/api/welfare/cases', requireAuth(['welfare']), (req, res) => {
+  let rows = welfareCaseRows(req.user.id);
+  const q = String(req.query.q || '').toLowerCase();
+  if (q) rows = rows.filter(row => `${row.case_id} ${row.name} ${row.force_id} ${row.unit} ${row.source}`.toLowerCase().includes(q));
+  for (const key of ['priority', 'status', 'source_key', 'unit']) if (req.query[key]) rows = rows.filter(row => row[key] === req.query[key]);
+  if (req.query.due === 'overdue') rows = rows.filter(row => row.follow_up_due && row.follow_up_due < todayStr() && row.status !== 'Resolved');
+  send(res, 200, welfareQueuePayload(rows));
+});
+
+app.get('/api/welfare/cases/:id', requireAuth(['welfare']), (req, res) => {
+  const c = db.prepare(`SELECT c.*, p.rank, p.name, p.force_id, p.id AS pid, u.name AS unit
+    FROM support_cases c JOIN personnel p ON p.id = c.personnel_id
+    LEFT JOIN units u ON u.id = p.unit_id WHERE c.id = ?`).get(req.params.id);
+  if (!c) return send(res, 404, { error: 'Case not found' });
+  if (!canAccessCase(req.user, c)) return send(res, 403, { error: 'This case is assigned to another Welfare officer' });
+  const notes = db.prepare(`SELECT n.note, n.at, u.name AS author FROM case_notes n
+    JOIN users u ON u.id = n.author_id WHERE n.case_id = ? ORDER BY n.at DESC`).all(c.id);
+  const share = safeJson(c.shared_context, {});
+  const timeline = db.prepare(`SELECT e.event_type,e.detail,e.at,u.name actor,u.role actor_role
+    FROM case_events e LEFT JOIN users u ON u.id=e.actor_id WHERE e.case_id=? ORDER BY e.at,e.id`).all(c.id);
+  const assigned = c.assigned_officer_id ? db.prepare('SELECT id,name FROM users WHERE id=?').get(c.assigned_officer_id) : null;
+  audit(req.user, 'view_support_case', c.pid, 'Case #' + c.id);
+  send(res, 200, {
+    case: { id: c.id, case_id: `CASE #${c.id}`, reason: c.reason, details: c.details,
+      source: supportSourceLabel(c.source), source_key: c.source, priority: c.priority,
+      status: c.status, next_action: c.next_action, follow_up_due: c.follow_up_due,
+      last_contact_at: c.last_contact_at, first_response_at: c.first_response_at,
+      created_at: c.created_at, resolved_at: c.resolved_at },
+    person: { id: c.pid, rank: c.rank, name: c.name, force_id: c.force_id, unit: c.unit || '—' },
+    assigned_officer: assigned,
+    shared_context: { selected: share.selected || {}, snapshot: share.snapshot || {},
+      granted_at: share.granted_at || null, withdrawn_at: share.withdrawn_at || null,
+      journal: { shared: false, label: 'Locked — never shared' } },
+    consented_context: share.snapshot || null,
+    work_context: share.snapshot?.work_context || null,
+    timeline,
+    notes,
+    privacy: 'No journal text, journal analytics, or assessment answers are returned by this endpoint.'
+  });
+});
+
+app.post('/api/welfare/cases/:id', requireAuth(['welfare']), (req, res) => {
+  const c = db.prepare('SELECT * FROM support_cases WHERE id = ?').get(req.params.id);
+  if (!c) return send(res, 404, { error: 'Case not found' });
+  if (!canAccessCase(req.user, c)) return send(res, 403, { error: 'This case is assigned to another Welfare officer' });
+  const b = req.body || {};
+  const updates = {};
+  if (b.status !== undefined) {
+    if (!CASE_STATUSES.includes(b.status)) return send(res, 400, { error: 'Invalid status' });
+    if (b.status !== c.status && !(CASE_TRANSITIONS[c.status] || []).includes(b.status))
+      return send(res, 409, { error: `Cannot move a ${c.status} case to ${b.status}` });
+    if (b.status !== c.status) {
+      updates.status = b.status;
+      if (b.status === 'Resolved') {
+        updates.resolved_at = new Date().toISOString();
+      } else if (b.status === 'Contacted') {
+        updates.last_contact_at = new Date().toISOString();
+        if (!c.first_response_at) updates.first_response_at = updates.last_contact_at;
+      }
+    }
+  }
+  if (b.next_action !== undefined) updates.next_action = String(b.next_action).slice(0, 200);
+  if (b.follow_up_due !== undefined) {
+    if (b.follow_up_due && !validDate(b.follow_up_due)) return send(res, 400, { error: 'Bad date' });
+    updates.follow_up_due = b.follow_up_due || null;
+  }
+  if (b.priority !== undefined) {
+    if (!CASE_PRIORITIES.includes(b.priority)) return send(res, 400, { error: 'Invalid priority' });
+    updates.priority = b.priority;
+  }
+  const note = String(b.note || '').trim();
+  const keys = Object.keys(updates);
+  if (!keys.length && !note) return send(res, 400, { error: 'No case update supplied' });
+  inTransaction(() => {
+    if (keys.length) db.prepare(`UPDATE support_cases SET ${keys.map(k => k + '=?').join(', ')} WHERE id = ?`)
+      .run(...keys.map(k => updates[k]), c.id);
+    if (b.status !== undefined && b.status !== c.status) addCaseEvent(c.id, req.user.id, 'status_changed', `${c.status} → ${b.status}`);
+    if (b.next_action !== undefined) addCaseEvent(c.id, req.user.id, 'next_action_updated', updates.next_action);
+    if (b.follow_up_due !== undefined) addCaseEvent(c.id, req.user.id, 'follow_up_scheduled', updates.follow_up_due || 'Cleared');
+    if (b.priority !== undefined && b.priority !== c.priority) addCaseEvent(c.id, req.user.id, 'priority_changed', `${c.priority} → ${b.priority}`);
+    if (note) {
+      db.prepare('INSERT INTO case_notes (case_id, author_id, note, at) VALUES (?,?,?,?)')
+        .run(c.id, req.user.id, note.slice(0, 1000), new Date().toISOString());
+      addCaseEvent(c.id, req.user.id, 'note_added', 'Welfare note added');
+    }
+    audit(req.user, 'update_support_case', c.personnel_id, `Case #${c.id}`);
+  });
+  send(res, 200, { ok: true });
+});
+
+app.get('/api/welfare/followups', requireAuth(['welfare']), (req, res) => {
+  const rows = welfareCaseRows(req.user.id).filter(row => row.status !== 'Resolved' && row.follow_up_due)
+    .sort((a, b) => a.follow_up_due.localeCompare(b.follow_up_due));
+  send(res, 200, { followups: rows, as_of: todayStr() });
+});
+
+app.get('/api/welfare/record-reviews', requireAuth(['welfare']), (_req, res) => {
+  const reviews = db.prepare(`SELECT d.id,d.category,d.message,d.created_at,d.status,d.resolution_note,
+    p.id personnel_id,p.rank,p.name,p.force_id,u.name unit,ru.name resolved_by
+    FROM data_corrections d JOIN personnel p ON p.id=d.personnel_id LEFT JOIN units u ON u.id=p.unit_id
+    LEFT JOIN users ru ON ru.id=d.resolved_by ORDER BY
+    CASE d.status WHEN 'submitted' THEN 0 WHEN 'reviewing' THEN 1 ELSE 2 END,d.created_at DESC`).all();
+  send(res, 200, { reviews });
+});
+
+app.get('/api/welfare/insights', requireAuth(['welfare']), (req, res) => {
+  const rows = welfareCaseRows(req.user.id);
+  const open = rows.filter(row => row.status !== 'Resolved');
+  const countBy = (items, key) => Object.fromEntries([...new Set(items.map(item => item[key] || 'Unspecified'))]
+    .map(value => [value, items.filter(item => (item[key] || 'Unspecified') === value).length]));
+  const age = { '<24h': 0, '1–3 days': 0, '4–7 days': 0, '>7 days': 0 };
+  for (const row of open) {
+    const hours = Math.max(0, (Date.now() - new Date(row.created_at).getTime()) / 3600000);
+    age[hours < 24 ? '<24h' : hours < 96 ? '1–3 days' : hours < 192 ? '4–7 days' : '>7 days']++;
+  }
+  const responseHours = rows.filter(row => row.first_response_at).map(row =>
+    Math.max(0, (new Date(row.first_response_at) - new Date(row.created_at)) / 3600000)).sort((a, b) => a - b);
+  const middle = Math.floor(responseHours.length / 2);
+  const median = responseHours.length ? (responseHours.length % 2 ? responseHours[middle]
+    : (responseHours[middle - 1] + responseHours[middle]) / 2) : null;
+  const volumeMap = new Map();
+  for (const row of rows.filter(row => row.created_at.slice(0, 10) >= sinceDate(29))) {
+    const date = row.created_at.slice(0, 10); volumeMap.set(date, (volumeMap.get(date) || 0) + 1);
+  }
+  send(res, 200, {
+    priority: countBy(open, 'priority'),
+    follow_up: { completed: rows.filter(row => row.status === 'Resolved').length,
+      due: open.filter(row => row.follow_up_due && row.follow_up_due >= todayStr()).length,
+      overdue: open.filter(row => row.follow_up_due && row.follow_up_due < todayStr()).length },
+    case_age: age,
+    source_distribution: countBy(rows, 'source'),
+    median_first_response_hours: median == null ? null : +median.toFixed(1),
+    volume_trend: [...volumeMap.entries()].sort().map(([date, count]) => ({ date, count }))
+  });
 });
 
 // Never let an old HTML/app.js stay paired with a newly deployed API. Assets such

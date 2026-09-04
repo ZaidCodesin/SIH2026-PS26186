@@ -3,9 +3,13 @@ services:
     name: sentinel-sih
     runtime: node
     plan: free
-    branch: dev
-    buildCommand: npm install
+    buildCommand: npm ci --omit=dev
     startCommand: npm start
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
         value: 22.11.0
+      - key: NODE_ENV
+        value: production
+      - key: DEMO_ACCOUNTS
+        value: "true"
