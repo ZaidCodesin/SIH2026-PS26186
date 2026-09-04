@@ -37,16 +37,26 @@ if (db.prepare('SELECT COUNT(*) c FROM personnel').get().c === 0) {
 /* ---------------- helpers ---------------- */
 function send(res, code, obj) { res.status(code).json(obj); }
 function hash(pass, salt) { return crypto.scryptSync(pass, salt, 32).toString('hex'); }
+function sameSecret(a, b) {
+  const left = Buffer.from(String(a || '')), right = Buffer.from(String(b || ''));
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
 
 function parseCookies(req) {
   const h = req.headers.cookie || '';
-  return Object.fromEntries(h.split(';').map(p => p.trim().split('=').map(decodeURIComponent)).filter(a => a[0]));
+  try {
+    return Object.fromEntries(h.split(';').map(p => p.trim().split('=').map(decodeURIComponent)).filter(a => a[0]));
+  } catch { return {}; }
 }
 function getUser(req) {
   const sid = parseCookies(req).sid;
   if (!sid) return null;
   const s = db.prepare('SELECT * FROM sessions WHERE sid = ?').get(sid);
-  if (!s || s.expires_at < new Date().toISOString()) return null;
+  if (!s) return null;
+  if (s.expires_at < new Date().toISOString()) {
+    db.prepare('DELETE FROM sessions WHERE sid = ?').run(sid);
+    return null;
+  }
   return db.prepare('SELECT * FROM users WHERE id = ?').get(s.user_id) || null;
 }
 function requireAuth(roles) {
@@ -90,8 +100,31 @@ app.post('/api/login', (req, res) => {
   if (Date.now() > attempt.reset) { attempt.count = 0; attempt.reset = Date.now() + 10 * 60000; }
   if (attempt.count >= 10) return send(res, 429, { error: 'Too many sign-in attempts. Try again in a few minutes.' });
   const { username, password } = req.body || {};
-  const u = db.prepare('SELECT * FROM users WHERE username = ?').get(String(username || ''));
-  if (!u || hash(String(password || ''), u.salt) !== u.pass_hash) {
+  const identifier = String(username || '').trim();
+  const suppliedPassword = String(password || '');
+  if (!identifier || identifier.length > 100 || suppliedPassword.length > 256) {
+    attempt.count++; loginAttempts.set(key, attempt);
+    return send(res, 401, { error: 'Invalid credentials' });
+  }
+  const matchedUsers = db.prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE').all(identifier);
+  let u = matchedUsers.length === 1 ? matchedUsers[0] : null;
+
+  // Prototype personnel may sign in with their service ID. Provisioning is
+  // lazy so existing databases gain access without a destructive re-seed.
+  const demoAccess = process.env.DEMO_ACCOUNTS !== 'false';
+  const demoPassword = process.env.DEMO_PERSONNEL_PASSWORD || 'demo123';
+  if (!u && matchedUsers.length === 0 && demoAccess && sameSecret(suppliedPassword, demoPassword)) {
+    const p = db.prepare('SELECT * FROM personnel WHERE force_id = ? COLLATE NOCASE AND active = 1').get(identifier);
+    if (p) {
+      const salt = crypto.randomBytes(16).toString('hex');
+      db.prepare(`INSERT OR IGNORE INTO users
+        (username, pass_hash, salt, role, name, unit_id, personnel_id, created_at)
+        VALUES (?,?,?,?,?,?,?,?)`)
+        .run(p.force_id, hash(demoPassword, salt), salt, 'personnel', p.name, p.unit_id, p.id, new Date().toISOString());
+      u = db.prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE').get(p.force_id);
+    }
+  }
+  if (!u || hash(suppliedPassword, u.salt) !== u.pass_hash) {
     attempt.count++; loginAttempts.set(key, attempt);
     return send(res, 401, { error: 'Invalid credentials' });
   }
@@ -103,6 +136,70 @@ app.post('/api/login', (req, res) => {
   res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; Path=/; Max-Age=604800; SameSite=Lax${secure ? '; Secure' : ''}`);
   send(res, 200, { ok: true, role: u.role, name: u.name });
 });
+
+const RANKS = ['Sepoy', 'Constable', 'Naik', 'Havildar', 'Naib Subedar', 'Subedar', 'Inspector', 'Sub-Inspector'];
+
+app.get('/api/units', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  send(res, 200, { units: db.prepare('SELECT id, name FROM units ORDER BY name').all() });
+});
+
+app.post('/api/register', (req, res) => {
+  const key = (req.socket.remoteAddress || 'unknown') + ':register';
+  const attempt = loginAttempts.get(key) || { count: 0, reset: Date.now() + 10 * 60000 };
+  if (Date.now() > attempt.reset) { attempt.count = 0; attempt.reset = Date.now() + 10 * 60000; }
+  if (attempt.count >= 20) return send(res, 429, { error: 'Too many attempts. Try again shortly.' });
+
+  const b = req.body || {};
+  const name = String(b.name || '').trim();
+  const forceId = String(b.service_id || '').trim();
+  const rank = String(b.rank || '').trim();
+  const unitId = Number(b.unit_id);
+  const newUnit = String(b.new_unit || '').trim();
+  const password = String(b.password || '');
+  const fail = m => { attempt.count++; loginAttempts.set(key, attempt); return send(res, 400, { error: m }); };
+
+  if (name.length < 2 || name.length > 80) return fail('Enter your full name (2–80 characters).');
+  if (!/^[A-Za-z0-9-]{4,20}$/.test(forceId)) return fail('Service ID must be 4–20 letters, numbers or dashes.');
+  if (!RANKS.includes(rank)) return fail('Select a valid rank.');
+  if (password.length < 8 || password.length > 128 || !/[A-Za-z]/.test(password) || !/\d/.test(password))
+    return fail('Password must be 8+ characters and include letters and numbers.');
+
+  let finalUnitId = null;
+  if (newUnit) {
+    if (newUnit.length < 2 || newUnit.length > 60) return fail('Unit name must be 2–60 characters.');
+    if (db.prepare('SELECT id FROM units WHERE name = ? COLLATE NOCASE').get(newUnit))
+      return fail('That unit already exists — select it from the list instead.');
+    finalUnitId = Number(db.prepare('INSERT INTO units (name, region) VALUES (?,?)').run(newUnit, '').lastInsertRowid);
+  } else {
+    if (!Number.isInteger(unitId) || !db.prepare('SELECT id FROM units WHERE id = ?').get(unitId))
+      return fail('Select your unit, or enter a new unit name.');
+    finalUnitId = unitId;
+  }
+
+  if (db.prepare('SELECT id FROM users WHERE username = ? COLLATE NOCASE').get(forceId) ||
+      db.prepare('SELECT id FROM personnel WHERE force_id = ? COLLATE NOCASE').get(forceId))
+    return fail('An account with this Service ID already exists.');
+
+  const joinDate = todayStr();
+  const pid = Number(db.prepare(`INSERT INTO personnel (force_id, rank, name, unit_id, years_service, family_status, join_date, active)
+    VALUES (?,?,?,?,0,'single',?,1)`).run(forceId, rank, name, finalUnitId, joinDate).lastInsertRowid);
+  const salt = crypto.randomBytes(16).toString('hex');
+  const userId = Number(db.prepare(`INSERT INTO users (username, pass_hash, salt, role, name, unit_id, personnel_id, created_at)
+    VALUES (?,?,?,?,?,?,?,?)`)
+    .run(forceId, hash(password, salt), salt, 'personnel', name, finalUnitId, pid, new Date().toISOString()).lastInsertRowid);
+  runPipeline();
+  audit({ id: userId }, 'account_registered', pid, 'Self-registration');
+
+  loginAttempts.delete(key);
+  const sid = crypto.randomBytes(24).toString('hex');
+  const exp = new Date(Date.now() + 7 * 86400000).toISOString();
+  db.prepare('INSERT INTO sessions (sid, user_id, created_at, expires_at) VALUES (?,?,?,?)').run(sid, userId, new Date().toISOString(), exp);
+  const secure = process.env.NODE_ENV === 'production' || req.get('x-forwarded-proto') === 'https';
+  res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; Path=/; Max-Age=604800; SameSite=Lax${secure ? '; Secure' : ''}`);
+  send(res, 200, { ok: true, role: 'personnel', name });
+});
+
 app.post('/api/logout', (req, res) => {
   const sid = parseCookies(req).sid;
   if (sid) db.prepare('DELETE FROM sessions WHERE sid = ?').run(sid);
@@ -116,7 +213,7 @@ app.get('/api/me', (req, res) => {
 });
 app.get('/api/version', (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
-  send(res, 200, { version: APP_VERSION, features: ['WHO5', 'journal-insights-v1'] });
+  send(res, 200, { version: APP_VERSION, features: ['WHO5', 'journal-insights-v1', 'service-id-login'] });
 });
 
 /* ==== risk pipeline & API routes appended below ==== */
@@ -126,7 +223,7 @@ function gatherData(pid, today) {
   const personnel = db.prepare('SELECT * FROM personnel WHERE id = ?').get(pid);
   if (!personnel) return null;
   const hr = db.prepare(`SELECT * FROM hr_events WHERE personnel_id = ? AND date >= ?
-    ORDER BY date ASC`).all(pid, new Date(Date.now() - 200 * 86400000).toISOString().slice(0, 10));
+    ORDER BY date ASC`).all(pid, new Date(Date.now() - 370 * 86400000).toISOString().slice(0, 10));
   const checkins = db.prepare(`SELECT * FROM checkins WHERE personnel_id = ? AND date >= ?
     ORDER BY date ASC`).all(pid, new Date(Date.now() - 65 * 86400000).toISOString().slice(0, 10));
   const assessments = db.prepare(`SELECT * FROM assessments WHERE personnel_id = ? AND date >= ?
@@ -137,6 +234,7 @@ function gatherData(pid, today) {
 /** Recompute today's risk for everyone active; raise alerts for Elevated/Critical. */
 function runPipeline() {
   const today = todayStr();
+  const now = new Date().toISOString();
   const active = db.prepare('SELECT id FROM personnel WHERE active = 1').all();
   const counts = { Critical: 0, Elevated: 0, Watch: 0, Low: 0 };
   for (const { id } of active) {
@@ -148,19 +246,35 @@ function runPipeline() {
       .run(id, today, r.score, r.band, JSON.stringify(r.factors));
     counts[r.band]++;
     if (r.band === 'Elevated' || r.band === 'Critical') {
-      const open = db.prepare(`SELECT id FROM alerts WHERE personnel_id = ? AND status IN ('new','acknowledged')
-        ORDER BY created_at DESC LIMIT 1`).get(id);
       const top = r.factors.slice(0, 3).map(f => f.label).join('; ');
-      if (!open) {
-        db.prepare('INSERT INTO alerts (personnel_id, level, reason, created_at, status) VALUES (?,?,?,?,?)')
-          .run(id, r.band, `${r.band} support priority: ${top || 'current welfare indicators'}`, new Date().toISOString(), 'new');
-      } else db.prepare('UPDATE alerts SET level=?, reason=? WHERE id=?')
-        .run(r.band, `${r.band} support priority: ${top || 'current welfare indicators'}`, open.id);
+      const reason = `${r.band} support priority: ${top || 'current welfare indicators'}`;
+      const signature = `${r.band}:${r.factors.slice(0, 3).map(f => f.key).sort().join(',')}`;
+      const open = db.prepare(`SELECT * FROM alerts WHERE personnel_id=? AND status IN ('new','acknowledged')
+        ORDER BY created_at DESC, id DESC LIMIT 1`).get(id);
+      const latest = db.prepare('SELECT * FROM alerts WHERE personnel_id = ? ORDER BY created_at DESC, id DESC LIMIT 1').get(id);
+      if (open) {
+        db.prepare('UPDATE alerts SET level=?, reason=?, risk_signature=?, last_seen_at=? WHERE id=?')
+          .run(r.band, reason, signature, now, open.id);
+        db.prepare(`UPDATE alerts SET status='dismissed', resolved_at=COALESCE(resolved_at, ?),
+          action_note='Superseded by the current open case' WHERE personnel_id=? AND id<>?
+          AND status IN ('new','acknowledged')`).run(now, id, open.id);
+      } else if (!latest || latest.cleared_at || latest.risk_signature !== signature) {
+        db.prepare(`INSERT INTO alerts
+          (personnel_id, level, reason, created_at, status, risk_signature, last_seen_at)
+          VALUES (?,?,?,?,?,?,?)`).run(id, r.band, reason, now, 'new', signature, now);
+      } else {
+        db.prepare('UPDATE alerts SET level=?, reason=?, risk_signature=?, last_seen_at=? WHERE id=?')
+          .run(r.band, reason, signature, now, latest.id);
+      }
     }
   }
-  db.prepare(`UPDATE alerts SET status='dismissed', action_note='Automatically closed: current indicators are below alert threshold'
-    WHERE status IN ('new','acknowledged') AND personnel_id IN
-    (SELECT personnel_id FROM risk_scores WHERE date=? AND band NOT IN ('Elevated','Critical'))`).run(today);
+  db.prepare(`UPDATE alerts SET status='dismissed', resolved_at=COALESCE(resolved_at, ?), cleared_at=?,
+    action_note='Automatically closed: current indicators are below alert threshold'
+    WHERE cleared_at IS NULL AND status IN ('new','acknowledged') AND personnel_id IN
+    (SELECT personnel_id FROM risk_scores WHERE date=? AND band NOT IN ('Elevated','Critical'))`).run(now, now, today);
+  db.prepare(`UPDATE alerts SET cleared_at=? WHERE cleared_at IS NULL AND status IN ('actioned','dismissed')
+    AND personnel_id IN (SELECT personnel_id FROM risk_scores WHERE date=?
+    AND band NOT IN ('Elevated','Critical'))`).run(now, today);
   return counts;
 }
 // Reconcile stored snapshots and open alerts whenever scoring rules change or the
@@ -189,6 +303,7 @@ app.post('/api/checkin', requireAuth(['personnel']), (req, res) => {
 
 app.post('/api/assessment', requireAuth(['personnel']), (req, res) => {
   const { type, answers } = req.body || {};
+  if (!req.user.personnel_id) return send(res, 400, { error: 'No personnel record linked to this account' });
   const spec = {
     WHO5: { count: 5, maxAnswer: 5 },
     PSS10: { count: 10, maxAnswer: 4 },
@@ -296,8 +411,11 @@ app.get('/api/welfare/overview', requireAuth(['welfare']), (req, res) => {
 app.post('/api/data-corrections/:id', requireAuth(['welfare']), (req, res) => {
   const row = db.prepare('SELECT * FROM data_corrections WHERE id=?').get(req.params.id);
   if (!row) return send(res, 404, { error: 'Request not found' });
-  const status = ['reviewing','resolved','declined'].includes(req.body && req.body.status) ? req.body.status : 'reviewing';
-  const note = String(req.body && req.body.resolution_note || '').slice(0, 1000);
+  const status = req.body && req.body.status;
+  const transitions = { submitted: ['reviewing','resolved','declined'], reviewing: ['resolved','declined'] };
+  if (!(transitions[row.status] || []).includes(status)) return send(res, 409, { error: `Cannot move a ${row.status} request to ${status || 'that status'}` });
+  const note = String(req.body && req.body.resolution_note || '').trim().slice(0, 1000);
+  if (['resolved','declined'].includes(status) && note.length < 3) return send(res, 400, { error: 'Add a short resolution note' });
   db.prepare('UPDATE data_corrections SET status=?,resolved_by=?,resolution_note=? WHERE id=?').run(status, req.user.id, note, row.id);
   audit(req.user, 'data_correction_' + status, row.personnel_id, note);
   send(res, 200, { ok: true });
@@ -315,7 +433,7 @@ app.get('/api/personnel/:id', requireAuth(['welfare']), (req, res) => {
   const history = db.prepare('SELECT date, score, band FROM risk_scores WHERE personnel_id = ? ORDER BY date ASC').all(p.id);
   const interventions = db.prepare('SELECT * FROM interventions WHERE personnel_id = ? ORDER BY recommended_at DESC').all(p.id);
   const alerts = db.prepare('SELECT * FROM alerts WHERE personnel_id = ? ORDER BY created_at DESC LIMIT 10').all(p.id);
-  send(res, 200, { personnel: p, risk, hr, checkins, history, interventions, alerts });
+  send(res, 200, { personnel: p, risk, recommendations: recommend(risk.factors), hr, checkins, history, interventions, alerts });
 });
 
 /* ---------------- private reflective journal (merged from seven50) ----------------
@@ -446,6 +564,28 @@ app.post('/api/journal', requireAuth(['personnel']), (req, res) => {
 });
 
 /* ---------------- alerts & interventions ---------------- */
+const INTERVENTION_TYPES = new Set(['counseling','rest_rotation','workload_rebalance','family_leave','peer_support','medical_check']);
+function recommendationsFor(pid) {
+  const data = gatherData(pid, todayStr());
+  return data ? recommend(computeRisk(data).factors).filter(r => INTERVENTION_TYPES.has(r.type)) : [];
+}
+function insertRecommendations(pid, requestedTypes) {
+  const allowed = recommendationsFor(pid);
+  const wanted = new Set((requestedTypes || []).filter(x => typeof x === 'string'));
+  const selected = wanted.size ? allowed.filter(r => wanted.has(r.type)) : allowed;
+  const inserted = [];
+  for (const r of selected.slice(0, 4)) {
+    const duplicate = db.prepare(`SELECT id FROM interventions WHERE personnel_id=? AND type=?
+      AND status IN ('recommended','accepted') LIMIT 1`).get(pid, r.type);
+    if (!duplicate) {
+      db.prepare('INSERT INTO interventions (personnel_id, type, reason, recommended_at, status) VALUES (?,?,?,?,?)')
+        .run(pid, r.type, r.reason, new Date().toISOString(), 'recommended');
+      inserted.push(r);
+    }
+  }
+  return inserted;
+}
+
 app.get('/api/alerts', requireAuth(['welfare']), (req, res) => {
   const rows = db.prepare(`SELECT a.*, p.name, p.rank, p.force_id, u.name AS unit FROM alerts a
     JOIN personnel p ON p.id = a.personnel_id JOIN units u ON u.id = p.unit_id
@@ -459,29 +599,30 @@ app.post('/api/alerts/:id', requireAuth(['welfare']), (req, res) => {
   const { status, action_note, interventions: recs } = req.body || {};
   const nextStatus = ['acknowledged', 'actioned', 'dismissed'].includes(status) ? status : null;
   if (!nextStatus) return send(res, 400, { error: 'Invalid alert status' });
-  db.prepare('UPDATE alerts SET status = ?, acted_by = ?, action_note = ? WHERE id = ?')
+  const transitions = { new: ['acknowledged','actioned','dismissed'], acknowledged: ['actioned','dismissed'] };
+  if (!(transitions[a.status] || []).includes(nextStatus)) return send(res, 409, { error: `Cannot move a ${a.status} case to ${nextStatus}` });
+  const note = String(action_note || '').trim().slice(0, 1000);
+  if (nextStatus === 'actioned' && note.length < 3) return send(res, 400, { error: 'Add a short action note' });
+  db.prepare('UPDATE alerts SET status = ?, acted_by = ?, action_note = ?, resolved_at = ? WHERE id = ?')
     .run(nextStatus,
-      req.user.id, String(action_note || ''), a.id);
+      req.user.id, note, ['actioned','dismissed'].includes(nextStatus) ? new Date().toISOString() : null, a.id);
   if (Array.isArray(recs)) {
-    for (const r of recs.slice(0, 6)) {
-      db.prepare('INSERT INTO interventions (personnel_id, type, reason, recommended_at, status) VALUES (?,?,?,?,?)')
-        .run(a.personnel_id, String(r.type || 'peer_support'), String(r.reason || ''), new Date().toISOString(), 'recommended');
-    }
+    insertRecommendations(a.personnel_id, recs.map(r => String(r && r.type || '')));
   }
-  audit(req.user, 'alert_' + nextStatus, a.personnel_id, action_note || '');
+  audit(req.user, 'alert_' + nextStatus, a.personnel_id, note);
   send(res, 200, { ok: true });
 });
 
 app.post('/api/interventions/recommend', requireAuth(['welfare']), (req, res) => {
-  const { personnel_id, recs } = req.body || {};
+  const { personnel_id, type, recs } = req.body || {};
   const p = db.prepare('SELECT id FROM personnel WHERE id = ?').get(personnel_id);
   if (!p) return send(res, 404, { error: 'Personnel not found' });
-  for (const r of (Array.isArray(recs) ? recs : []).slice(0, 6)) {
-    db.prepare('INSERT INTO interventions (personnel_id, type, reason, recommended_at, status) VALUES (?,?,?,?,?)')
-      .run(p.id, String(r.type || 'peer_support'), String(r.reason || ''), new Date().toISOString(), 'recommended');
-  }
-  audit(req.user, 'recommend_intervention', p.id, (recs || []).map(r => r.type).join(','));
-  send(res, 200, { ok: true });
+  const requested = type ? [String(type)] : (Array.isArray(recs) ? recs.map(r => String(r && r.type || '')) : []);
+  if (!requested.length || requested.some(x => !INTERVENTION_TYPES.has(x))) return send(res, 400, { error: 'Choose a valid recommended intervention' });
+  const selected = insertRecommendations(p.id, requested);
+  if (!selected.length) return send(res, 409, { error: 'That support plan is already active or is not currently recommended' });
+  audit(req.user, 'recommend_intervention', p.id, selected.map(r => r.type).join(','));
+  send(res, 200, { ok: true, recommendations: selected });
 });
 app.post('/api/interventions/:id', requireAuth(['welfare']), (req, res) => {
   const iv = db.prepare('SELECT * FROM interventions WHERE id = ?').get(req.params.id);
@@ -489,11 +630,15 @@ app.post('/api/interventions/:id', requireAuth(['welfare']), (req, res) => {
   const { status, outcome_note } = req.body || {};
   const nextStatus = ['accepted', 'completed', 'declined'].includes(status) ? status : null;
   if (!nextStatus) return send(res, 400, { error: 'Invalid intervention status' });
+  const transitions = { recommended: ['accepted','declined'], accepted: ['completed','declined'] };
+  if (!(transitions[iv.status] || []).includes(nextStatus)) return send(res, 409, { error: `Cannot move a ${iv.status} plan to ${nextStatus}` });
+  const note = String(outcome_note || '').trim().slice(0, 1000);
+  if (['completed','declined'].includes(nextStatus) && note.length < 3) return send(res, 400, { error: 'Add a short outcome note' });
   db.prepare('UPDATE interventions SET status = ?, completed_at = ?, outcome_note = ? WHERE id = ?')
     .run(nextStatus,
       nextStatus === 'completed' ? new Date().toISOString() : iv.completed_at,
-      String(outcome_note || iv.outcome_note), iv.id);
-  audit(req.user, 'intervention_' + nextStatus, iv.personnel_id, outcome_note || '');
+      note || iv.outcome_note, iv.id);
+  audit(req.user, 'intervention_' + nextStatus, iv.personnel_id, note);
   send(res, 200, { ok: true });
 });
 

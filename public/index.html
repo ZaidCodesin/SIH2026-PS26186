@@ -15,40 +15,44 @@
 
 <!-- INSTITUTIONAL ACCESS -->
 <div id="login-view" class="public-shell">
-  <header class="public-nav"><div class="brand-mark"><span>S</span><div><b>SENTINEL</b><small>Personnel welfare system</small></div></div>
-    <span class="prototype-tag">PS 26186 · Working prototype</span></header>
+  <header class="public-nav"><div class="brand-mark"><span>S</span><div><b>SENTINEL</b><small>Personnel welfare system</small></div></div></header>
   <main class="access-layout">
     <section class="access-intro">
-      <p class="eyebrow">Privacy-first early support</p>
       <h1>See work pressure earlier.<br><span>Respond with care.</span></h1>
-      <p class="lead">SENTINEL brings organizational workload records and voluntary wellbeing signals together so uniformed forces can act before strain becomes a crisis—without turning private reflection into surveillance.</p>
-      <div class="principles">
-        <div><b>Work conditions first</b><span>Duty load, deployment, leave and recovery—not personality labels.</span></div>
-        <div><b>Access by responsibility</b><span>Personnel, welfare teams and commanders see different information.</span></div>
-        <div><b>Human decisions</b><span>Support priority is explainable and never a diagnosis or disciplinary score.</span></div>
-      </div>
+      <p class="lead">Workload and voluntary wellbeing signals in one place — private reflections stay private.</p>
     </section>
     <section class="access-panel">
       <div id="portal-choice">
-        <p class="eyebrow">Secure access</p><h2>Choose your workspace</h2>
-        <p class="muted">Your role determines what data and actions are available.</p>
-        <button class="portal-row" data-portal="personnel"><span class="portal-icon">P</span><span><b>Personnel</b><small>Check in, review your workload data, assessments and private journal</small></span><i>→</i></button>
-        <button class="portal-row" data-portal="welfare"><span class="portal-icon">W</span><span><b>Welfare Officer</b><small>Review support cases, coordinate follow-up and record outcomes</small></span><i>→</i></button>
-        <button class="portal-row" data-portal="commander"><span class="portal-icon">C</span><span><b>Commander</b><small>View anonymized unit workload patterns and balancing actions</small></span><i>→</i></button>
+        <h2>Choose your workspace</h2>
+        <button class="portal-row" data-portal="personnel"><span class="portal-icon">P</span><span><b>Personnel</b><small>Check in, assess and journal</small></span><i>→</i></button>
+        <button class="portal-row" data-portal="welfare"><span class="portal-icon">W</span><span><b>Welfare Officer</b><small>Triage and coordinate support</small></span><i>→</i></button>
+        <button class="portal-row" data-portal="commander"><span class="portal-icon">C</span><span><b>Commander</b><small>Compare unit conditions</small></span><i>→</i></button>
       </div>
       <div id="signin-form" class="hidden">
         <button id="portal-back" class="text-button">← Change workspace</button>
-        <p id="portal-label" class="eyebrow"></p><h2>Sign in to SENTINEL</h2>
+        <p id="portal-label" class="eyebrow"></p><h2>Sign in</h2>
         <label for="li-user">Service ID / username</label><input id="li-user" autocomplete="username">
         <label for="li-pass">Password</label><input id="li-pass" type="password" autocomplete="current-password">
-        <button id="li-btn" class="btn primary">Continue securely</button>
+        <button id="li-btn" class="btn primary">Sign in</button>
         <p id="li-err" class="error hidden"></p>
-        <p class="access-help">Production access would use force identity/SSO and MFA. This prototype uses local role-based accounts.</p>
-        <details class="demo-access"><summary>Prototype evaluator access</summary><div id="demo-options"></div><p>Password: <code>demo123</code></p></details>
+        <button id="show-signup" class="text-button">New personnel? Create an account →</button>
+        <details class="demo-access"><summary>Sample accounts</summary><div id="demo-options"></div><p>Any seeded service ID (<code>CRPF100001</code>–<code>CRPF100150</code>) works with password <code>demo123</code></p></details>
+      </div>
+      <div id="signup-form" class="hidden">
+        <button id="signup-back" class="text-button">← Back to sign in</button>
+        <p class="eyebrow">Personnel workspace</p><h2>Create your account</h2>
+        <label for="su-name">Full name</label><input id="su-name" maxlength="80" autocomplete="name">
+        <label for="su-id">Service ID</label><input id="su-id" maxlength="20" autocomplete="off" placeholder="e.g. CRPF100999">
+        <label for="su-rank">Rank</label><select id="su-rank"></select>
+        <label for="su-unit">Unit</label><select id="su-unit"></select>
+        <label for="su-newunit">Or create a new unit <span class="muted">(optional)</span></label><input id="su-newunit" maxlength="60" autocomplete="off">
+        <label for="su-pass">Password</label><input id="su-pass" type="password" autocomplete="new-password" placeholder="8+ characters, letters and numbers">
+        <button id="su-btn" class="btn primary">Create account</button>
+        <p id="su-err" class="error hidden"></p>
       </div>
     </section>
   </main>
-  <footer class="public-footer"><span>Ministry of Home Affairs / CRPF challenge prototype</span><span>Confidential by design · Journal excluded from organizational analytics</span></footer>
+  <footer class="public-footer"><span>SENTINEL</span><span>Private journals stay outside organizational analytics</span></footer>
 </div>
 
 <!-- APP -->
@@ -64,13 +68,13 @@
   <div id="banner" class="banner hidden"></div>
 
   <main id="view-dashboard" class="view hidden">
-    <div class="view-heading"><div><p class="eyebrow">Personal workspace</p><h1>Your wellbeing, in context</h1><p>Compare how work is recorded with how you actually feel. You can review and challenge the records used.</p></div><span class="scope-note">Visible to you</span></div>
+    <div class="view-heading"><div><p class="eyebrow">Personal workspace</p><h1>Your wellbeing, in context</h1><p>See work records and check-ins side by side.</p></div><span class="scope-note">Visible to you</span></div>
     <div id="my-tiles" class="tiles"></div>
     <section id="work-feeling" class="context-panel"></section>
     <div class="cols">
       <section class="card">
         <h3>Daily wellness check-in</h3>
-        <p class="muted">Optional and confidential. Your answers can inform welfare support, but not disciplinary decisions.</p>
+        <p class="muted">Optional · confidential · never disciplinary.</p>
         <label>Stress level today: <b id="v-stress">5</b>/10</label>
         <input type="range" id="ci-stress" min="1" max="10" value="5">
         <label>Sleep last night (hours)</label>
@@ -89,16 +93,16 @@
       <section class="card">
         <h3>My stress trend</h3>
         <canvas id="my-chart" width="560" height="160"></canvas>
-        <h3 style="margin-top:14px">Transparency — who viewed my record</h3>
+        <h3 style="margin-top:14px">Record access</h3>
         <div id="my-access" class="access-log"></div>
         <div class="helpline">
-          📞 <b>Need to talk now?</b> Mental Health Rehabilitation Helpline: <b>1800-599-0019 (KIRAN)</b>
+          📞 <b>Need support now?</b> KIRAN: <b>1800-599-0019</b>
         </div>
       </section>
     </div>
     <div class="cols">
       <section class="card"><div class="section-head"><div><h3>Records used from HR systems</h3><p class="muted">Recent non-disciplinary organizational records.</p></div></div><div id="my-work-records"></div></section>
-      <section class="card"><h3>Something recorded incorrectly?</h3><p class="muted">Request a review. Your original record is not silently changed; the request is tracked.</p>
+      <section class="card"><h3>Something recorded incorrectly?</h3><p class="muted">Request a tracked review.</p>
         <select id="correction-category"><option value="workload">Duty workload</option><option value="leave">Leave record</option><option value="deployment">Deployment record</option><option value="profile">Profile information</option><option value="other">Other</option></select>
         <textarea id="correction-message" class="plain-textarea" placeholder="Describe what appears incorrect and what should be checked…"></textarea>
         <button id="correction-submit" class="btn">Submit review request</button><div id="correction-list"></div></section>
@@ -157,16 +161,15 @@
     <div id="jr-pane-write" class="jr-pane">
     <div class="card wide">
       <div class="row-between">
-        <h3>📝 Private reflective journal <span class="pill">visible only to you</span></h3>
+        <h3>Private journal <span class="pill">only you</span></h3>
         <span id="jr-streak" class="muted"></span>
       </div>
-      <p class="muted">Daily expressive writing is a proven stress-management practice. Nothing you write here is
-      shared with commanders, welfare officers, or the risk engine — it never leaves your account.</p>
+      <p class="muted">Your writing is excluded from commander, welfare and risk views.</p>
       <div class="jr-progress"><div id="jr-bar"></div></div>
       <p id="jr-count" class="muted" style="margin:6px 0">0 / 750 words</p>
       <textarea id="jr-editor" placeholder="Write about your day, your thoughts, anything on your mind…"></textarea>
       <div class="jr-voice">
-        <button id="jr-mic" class="mic-btn" title="Voice input">🎤 Speak</button>
+        <button id="jr-mic" class="mic-btn" title="Voice input" aria-pressed="false">🎤 Speak</button>
         <select id="jr-lang" title="Speech language">
           <option value="en-IN">English (India)</option>
           <option value="hi-IN">हिन्दी — Hindi</option>
@@ -184,7 +187,7 @@
         <span id="jr-mic-status" class="muted"></span>
       </div>
       <div id="jr-draft-wrap" class="jr-draft-wrap hidden">
-        <label for="jr-draft">⚠ Heard this, but not fully sure — check &amp; fix before it enters your journal:</label>
+        <label for="jr-draft">Check this phrase before adding it:</label>
         <textarea id="jr-draft" rows="2" placeholder="what the mic heard will appear here…"></textarea>
         <div class="jr-draft-actions">
           <button id="jr-draft-ok" class="mic-btn ok">✓ Add to journal</button>
@@ -224,7 +227,7 @@
           <section class="jr-an-box"><h3>Primary sense</h3><div id="jr-an-senses" class="jr-emoji-bars"></div></section>
         </div>
         <section class="jr-an-box"><h3>Us and them</h3><div id="jr-an-pronouns" class="jr-emoji-bars compact"></div></section>
-        <p class="muted jr-privacy-note">🔒 Keyword-based analysis runs on SENTINEL and is visible only to you. It is never sent to commanders, welfare officers, or the risk engine.</p>
+        <p class="muted jr-privacy-note">Private keyword patterns · excluded from organizational analytics.</p>
       </div>
     </div>
 
@@ -237,20 +240,39 @@
   </main>
 
   <main id="view-commander" class="view hidden">
-    <div class="view-heading"><div><p class="eyebrow">Command workspace</p><h1>Operational conditions</h1><p>Use unit-level evidence to reduce preventable strain. No individual wellness records are available here.</p></div><span class="scope-note">Aggregated · minimum group 5</span></div>
+    <div class="view-heading"><div><p class="eyebrow">Command workspace</p><h1>Operational conditions</h1><p>Spot unit pressure and act on workload, recovery and resourcing.</p></div><span class="scope-note">Aggregate only · groups of 5+</span></div>
+    <div id="cmd-status" class="workspace-status" role="status" aria-live="polite"></div>
     <div id="cmd-totals" class="metric-strip"></div>
-    <div class="cols cmd-grid"><section class="card"><h3>Priority organizational actions</h3><div id="cmd-actions"></div></section>
-      <section class="card"><h3>What this view can and cannot show</h3><div class="boundary-list"><p><b>Shows</b> unit workload, leave friction, deployment, incidents and sufficiently large pulse groups.</p><p><b>Does not show</b> names, journals, assessment answers or personal case notes.</p><p><b>Use for</b> staffing, roster, leave, recovery and resource decisions—not diagnosis.</p></div></section></div>
-    <section class="card wide"><div class="section-head"><div><h3>Unit pressure overview</h3><p class="muted">90-day organizational records; voluntary pulse averages cover 14 days.</p></div></div><div class="table-wrap"><table id="unit-table" class="tbl"></table></div></section>
-    <section class="card wide"><h3>Support-priority trend</h3><canvas id="trend-chart" width="900" height="200"></canvas></section>
+    <div class="cols cmd-grid"><section class="card action-card"><div class="section-head"><div><p class="section-kicker">Act next</p><h3>Priority organizational actions</h3></div><span id="cmd-action-count" class="count-badge">0</span></div><div id="cmd-actions"></div></section>
+      <section class="card guardrail-card"><div class="guardrail-heading"><span class="guardrail-icon" aria-hidden="true">◇</span><div><p class="section-kicker">Privacy guardrail</p><h3>Conditions, never case files</h3></div></div><p>Commanders see unit workload and sufficiently large pulse groups. Names, journals, assessments and support notes stay hidden.</p><details class="boundary-details"><summary>How to use this view</summary><p>Use it for staffing, rosters, leave, recovery and resources—not diagnosis or discipline.</p></details></section></div>
+    <section class="card wide"><div class="section-head dashboard-section-head"><div><p class="section-kicker">Compare units</p><h3>Unit pressure overview</h3><p class="muted">Organizational records: 90 days · voluntary pulse: 14 days</p></div><span id="cmd-unit-count" class="count-badge">0 units</span></div>
+      <div class="dashboard-toolbar" aria-label="Unit table filters">
+        <label class="search-control"><span class="sr-only">Search units</span><input id="cmd-search" type="search" placeholder="Search unit or region" autocomplete="off"></label>
+        <label><span class="sr-only">Filter by region</span><select id="cmd-region"><option value="all">All regions</option></select></label>
+        <label><span class="sr-only">Sort units</span><select id="cmd-sort"><option value="priority">Action first</option><option value="overtime">Highest overtime</option><option value="leave">Most leave denials</option><option value="incidents">Most incidents</option><option value="name">Unit A–Z</option></select></label>
+        <span id="cmd-filter-summary" class="filter-summary" role="status"></span>
+      </div>
+      <div class="table-wrap"><table id="unit-table" class="tbl unit-table"></table></div></section>
+    <section class="card wide trend-card"><div class="section-head"><div><p class="section-kicker">30-day view</p><h3>Support-priority trend</h3></div><span class="scope-note">Aggregate count</span></div><canvas id="trend-chart" width="1100" height="220"></canvas></section>
   </main>
 
   <main id="view-welfare" class="view hidden">
-    <div class="view-heading"><div><p class="eyebrow">Welfare operations</p><h1>Support casework</h1><p>Prioritize review, understand contributing evidence and track humane follow-up.</p></div><button id="recalc" class="btn">Refresh support model</button></div>
+    <div class="view-heading"><div><p class="eyebrow">Welfare operations</p><h1>Support casework</h1><p>Triage priority cases, coordinate support and close the loop.</p></div><div class="heading-actions"><span id="wf-updated" class="sync-status" role="status" aria-live="polite"></span><button id="recalc" class="btn">Refresh priorities</button></div></div>
     <div id="wf-summary" class="metric-strip"></div>
-    <div class="case-layout"><section class="card"><div class="section-head"><div><h3>Cases needing attention</h3><p class="muted">Ordered by support urgency and recency.</p></div><select id="case-filter"><option value="open">Open alerts</option><option value="all">All priority cases</option></select></div><div id="alerts-list" class="case-list"></div></section>
-      <section class="card"><h3>Personnel data-review requests</h3><p class="muted">Requests to verify an HR or profile record.</p><div id="correction-queue"></div></section></div>
-    <section class="card wide"><div class="section-head"><div><h3>Support-priority roster</h3><p class="muted">A review queue—not a diagnosis or misconduct list.</p></div></div><div id="roster" class="roster-table"></div></section>
+    <div class="case-layout"><section class="card queue-card"><div class="section-head dashboard-section-head"><div><p class="section-kicker">Triage</p><h3>Cases needing attention</h3></div><span id="case-count" class="count-badge">0 cases</span></div>
+        <div class="dashboard-toolbar case-toolbar" aria-label="Case queue filters">
+          <label class="search-control"><span class="sr-only">Search cases</span><input id="wf-search" type="search" placeholder="Search name, ID or unit" autocomplete="off"></label>
+          <label><span class="sr-only">Filter by case status</span><select id="case-filter"><option value="open">Open cases</option><option value="new">New only</option><option value="acknowledged">Acknowledged</option><option value="closed">Closed</option><option value="all">All cases</option></select></label>
+          <label><span class="sr-only">Filter by priority</span><select id="case-level"><option value="all">All priorities</option><option value="Critical">Critical</option><option value="Elevated">Elevated</option></select></label>
+        </div><div id="alerts-list" class="case-list" aria-live="polite"></div></section>
+      <section class="card review-card"><div class="section-head"><div><p class="section-kicker">Verify records</p><h3>Data-review requests</h3></div><span id="correction-count" class="count-badge">0</span></div><div id="correction-queue"></div></section></div>
+    <section class="card wide"><div class="section-head dashboard-section-head"><div><p class="section-kicker">Review queue</p><h3>Support-priority roster</h3><p class="muted">For support planning—not diagnosis or misconduct.</p></div><span id="roster-count" class="count-badge">0 people</span></div>
+      <div class="dashboard-toolbar roster-toolbar" aria-label="Roster filters">
+        <label class="search-control"><span class="sr-only">Search roster</span><input id="roster-search" type="search" placeholder="Search name, ID or signal" autocomplete="off"></label>
+        <label><span class="sr-only">Filter roster by priority</span><select id="roster-band"><option value="all">All priorities</option><option value="Critical">Critical</option><option value="Elevated">Elevated</option><option value="Watch">Watch</option></select></label>
+        <label><span class="sr-only">Filter roster by unit</span><select id="roster-unit"><option value="all">All units</option></select></label>
+        <span id="roster-filter-summary" class="filter-summary" role="status"></span>
+      </div><div id="roster" class="roster-table" aria-live="polite"></div></section>
   </main>
 
   <main id="view-person" class="view hidden">

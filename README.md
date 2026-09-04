@@ -83,12 +83,22 @@ Prototype evaluator accounts (password `demo123`):
 - Personnel: `sepoy.demo`
 - Welfare Officer: `welfare`
 - Commander: `commander`
+- Any seeded personnel service ID: `CRPF100001` through `CRPF100150`
 
-Credentials appear only inside the explicit **Prototype evaluator access** disclosure, not as production-style quick-login buttons.
+Service-ID accounts are provisioned on first successful prototype sign-in, so
+existing demo databases gain personnel access without being reset. Set
+`DEMO_ACCOUNTS=false` to disable this behavior or set
+`DEMO_PERSONNEL_PASSWORD` to change the shared prototype password.
+
+Credentials appear only inside the explicit **Demo credentials** disclosure, not as production-style quick-login buttons.
 
 ## Automated validation
 
-`npm test` starts an isolated server and verifies all role logins, cross-role denials, workload/self-report transparency, data correction workflow, welfare and commander payloads, journal privacy, no penalty for non-participation/disciplinary history, WHO-5 scoring and every journal insight group. Temporary test state is restored afterward.
+`npm test` creates a temporary SQLite database, starts an isolated server and
+verifies service-ID login, all roles, cross-role denials, workload/self-report
+transparency, correction and intervention workflows, commander minimization,
+journal privacy, risk exclusions, WHO-5 scoring and journal insights. The
+temporary database is removed afterward; the working database is never used.
 
 ## Main files
 

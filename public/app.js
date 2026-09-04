@@ -130,6 +130,43 @@ document.querySelectorAll('[data-portal]').forEach(b => b.onclick = () => {
   $('#demo-options .evaluator-fill').onclick = () => { $('#li-user').value=p.user; $('#li-pass').value='demo123'; };
 });
 $('#portal-back').onclick = () => { $('#signin-form').classList.add('hidden'); $('#portal-choice').classList.remove('hidden'); };
+
+/* ---- personnel self-registration ---- */
+const SU_RANKS = ['Sepoy', 'Constable', 'Naik', 'Havildar', 'Naib Subedar', 'Subedar', 'Inspector', 'Sub-Inspector'];
+$('#su-rank').innerHTML = '<option value="">Select rank</option>' + SU_RANKS.map(r => `<option>${r}</option>`).join('');
+let unitsLoaded = false;
+async function loadUnits() {
+  if (unitsLoaded) return;
+  try {
+    const j = await api('/api/units');
+    $('#su-unit').innerHTML = '<option value="">Select unit</option>' +
+      j.units.map(u => `<option value="${u.id}">${esc(u.name)}</option>`).join('');
+    unitsLoaded = true;
+  } catch { /* retry on next open */ }
+}
+$('#show-signup').onclick = () => {
+  $('#signin-form').classList.add('hidden'); $('#signup-form').classList.remove('hidden');
+  loadUnits(); $('#su-name').focus();
+};
+$('#signup-back').onclick = () => { $('#signup-form').classList.add('hidden'); $('#signin-form').classList.remove('hidden'); $('#li-user').focus(); };
+$('#su-btn').onclick = async () => {
+  $('#su-err').classList.add('hidden');
+  const payload = {
+    name: $('#su-name').value.trim(),
+    service_id: $('#su-id').value.trim(),
+    rank: $('#su-rank').value,
+    unit_id: $('#su-unit').value ? Number($('#su-unit').value) : 0,
+    new_unit: $('#su-newunit').value.trim(),
+    password: $('#su-pass').value
+  };
+  try {
+    await api('/api/register', { method: 'POST', body: JSON.stringify(payload) });
+    chosenPortal = 'personnel';
+    await login(payload.service_id, payload.password);
+  } catch (e) { $('#su-err').textContent = e.message; $('#su-err').classList.remove('hidden'); }
+};
+$('#su-pass').addEventListener('keydown', e => { if (e.key === 'Enter') $('#su-btn').click(); });
+
 async function login(username, password) {
   me = await api('/api/login', { method: 'POST', body: JSON.stringify({ username, password }) });
   if (chosenPortal && me.role !== chosenPortal) { await api('/api/logout',{method:'POST'}); throw new Error(`This account belongs to the ${me.role} workspace. Choose the correct portal.`); }
@@ -205,7 +242,7 @@ async function loadPersonnel() {
       <span class="t-sub">From organizational records</span>
     </div>`;
   const w=j.workload, sr=j.self_report;
-  $('#work-feeling').innerHTML=`<div><p class="eyebrow">Workload and lived experience</p><h2>${j.comparison}</h2><p>This comparison helps avoid assuming that HR records alone explain how you feel.</p></div>
+  $('#work-feeling').innerHTML=`<div><p class="eyebrow">Workload and lived experience</p><h2>${j.comparison}</h2><p>Records alongside your recent check-ins.</p></div>
     <div class="comparison-grid"><div><span>Recorded workload · 90 days</span><b>${w.overtime_hours}h overtime</b><small>${w.deployment_starts} deployments · ${w.leave_denials} leave denials · ${w.incident_exposures} incidents</small></div>
     <div><span>Your voluntary check-ins · recent 7</span><b>${sr.stress===null?'No recent response':sr.stress+'/10 stress'}</b><small>${sr.sleep===null?'Complete a check-in to compare':sr.sleep+'h sleep · '+sr.responses+' responses'}</small></div></div>`;
   $('#my-work-records').innerHTML=w.records.length?w.records.map(x=>`<div class="record-row"><time>${esc(x.date)}</time><div><b>${esc(x.type.replace(/_/g,' '))}</b><span>${x.value?esc(x.value)+' '+(x.type==='duty_overtime'?'hours':''):''}${x.note?' · '+esc(x.note):''}</span></div></div>`).join(''):'<p class="muted">No recent records.</p>';
@@ -213,7 +250,7 @@ async function loadPersonnel() {
   drawSpark($('#my-chart'), j.checkins.map(c => c.stress));
   $('#my-access').innerHTML = j.accessed.length
     ? j.accessed.map(a => `<div class="access-item">${a.at.slice(0, 10)} — <b>${a.actor}</b> (${a.role}) · ${a.action.replace(/_/g, ' ')}</div>`).join('')
-    : '<p class="muted">No one has viewed your record. You are notified whenever a welfare officer does.</p>';
+    : '<p class="muted">No welfare access recorded.</p>';
   lastAsmts = j.assessments || [];
 }
 $('#correction-submit').onclick=async()=>{try{await api('/api/my-data/correction',{method:'POST',body:JSON.stringify({category:$('#correction-category').value,message:$('#correction-message').value})});$('#correction-message').value='';toast('Review request submitted');loadPersonnel();}catch(e){toast(e.message)}};
@@ -322,21 +359,51 @@ $('#ci-save').onclick = async () => {
   loadPersonnel();
 };
 /* ==== welfare & commander (part 4) ==== */
+let commanderData = null;
 async function loadCommander() {
-  const j = await api('/api/dashboard/unit');
-  const labels={overtime_hours:'Overtime hours',deployments:'Deployments',leave_denials:'Leave denials',incidents:'Incident exposures',transfers:'Transfers',training_days:'Training days'};
-  $('#cmd-totals').innerHTML=Object.entries(j.totals).map(([k,v])=>`<div><span>${labels[k]}</span><b>${v}</b><small>last 90 days</small></div>`).join('');
-  $('#cmd-actions').innerHTML=j.actions.length?j.actions.map(a=>`<article class="action-row"><span>${esc(a.domain)}</span><div><b>${esc(a.action)}</b><p>${esc(a.unit)} · ${esc(a.evidence)}</p></div></article>`).join(''):'<p class="muted">No priority organizational actions generated from current records.</p>';
-  $('#unit-table').innerHTML = `
-    <tr><th>Unit</th><th>Strength</th><th>Overtime</th><th>Deployments</th><th>Leave denied</th><th>Incidents</th><th>Pulse stress</th><th>Pulse sleep</th></tr>
-    ${j.units.map(u => `
-      <tr>
-        <td><b>${esc(u.unit)}</b><small>${esc(u.region)}</small></td><td>${u.strength}</td><td>${u.workload.overtime_hours}h</td>
-        <td>${u.workload.deployments}</td><td>${u.workload.leave_denials}</td><td>${u.workload.incidents}</td>
-        <td>${u.pulse.avg_stress===null?'<span class="sup">suppressed</span>':u.pulse.avg_stress+'/10'}</td>
-        <td>${u.pulse.avg_sleep===null?'<span class="sup">suppressed</span>':u.pulse.avg_sleep+'h'}</td>
-      </tr>`).join('')}`;
-  drawTrend($('#trend-chart'), j.trend);
+  $('#cmd-status').textContent = 'Loading unit conditions…';
+  try {
+    commanderData = await api('/api/dashboard/unit');
+    const j = commanderData;
+    const metrics = [
+      ['overtime_hours','Overtime','hours'], ['leave_denials','Leave denied','requests'],
+      ['incidents','Incidents','exposures'], ['deployments','Deployments','starts']
+    ];
+    $('#cmd-totals').innerHTML=metrics.map(([k,label,unit])=>`<div><span>${label}</span><b>${Number(j.totals[k]||0).toLocaleString()}</b><small>${unit} · 90 days</small></div>`).join('');
+    $('#cmd-actions').innerHTML=j.actions.length?j.actions.map((a,i)=>`<article class="action-row"><span>${i+1}</span><div><b>${esc(a.action)}</b><p>${esc(a.unit)} · ${esc(a.evidence)}</p></div></article>`).join(''):'<p class="empty-state">No immediate unit action suggested.</p>';
+    $('#cmd-action-count').textContent = j.actions.length;
+    $('#cmd-unit-count').textContent = `${j.units.length} units`;
+    const regions=[...new Set(j.units.map(u=>u.region))].sort();
+    $('#cmd-region').innerHTML='<option value="all">All regions</option>'+regions.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('');
+    for (const id of ['cmd-search','cmd-region','cmd-sort']) $(`#${id}`).oninput=renderCommanderUnits;
+    renderCommanderUnits();
+    drawTrend($('#trend-chart'), j.trend);
+    $('#cmd-status').textContent = `Updated ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`;
+  } catch (e) {
+    $('#cmd-status').textContent = '';
+    $('#cmd-totals').innerHTML = `<p class="load-error">Could not load unit conditions. ${esc(e.message)}</p>`;
+  }
+}
+function unitPressure(u) {
+  const w=u.workload, pulse=u.pulse.avg_stress||0;
+  return w.overtime_per_person + (w.leave_denials/Math.max(u.strength,1))*18 +
+    (w.incidents/Math.max(u.strength,1))*28 + (w.deployments/Math.max(u.strength,1))*10 + pulse*2;
+}
+function renderCommanderUnits() {
+  if (!commanderData) return;
+  const q=$('#cmd-search').value.trim().toLowerCase(), region=$('#cmd-region').value, sort=$('#cmd-sort').value;
+  const rows=commanderData.units.filter(u=>(region==='all'||u.region===region)&&(!q||`${u.unit} ${u.region}`.toLowerCase().includes(q)));
+  const sorters={priority:(a,b)=>unitPressure(b)-unitPressure(a),overtime:(a,b)=>b.workload.overtime_per_person-a.workload.overtime_per_person,
+    leave:(a,b)=>b.workload.leave_denials-a.workload.leave_denials,incidents:(a,b)=>b.workload.incidents-a.workload.incidents,name:(a,b)=>a.unit.localeCompare(b.unit)};
+  rows.sort(sorters[sort]||sorters.priority);
+  $('#cmd-filter-summary').textContent=`${rows.length} shown`;
+  $('#unit-table').innerHTML = `<thead><tr><th>Unit</th><th>Signal</th><th>Overtime/person</th><th>Leave denied</th><th>Incidents</th><th>Pulse</th></tr></thead><tbody>${rows.map(u=>{
+    const pressure=unitPressure(u), signal=pressure>=75?'High load':pressure>=60?'Monitor':'Steady';
+    return `<tr><td><b>${esc(u.unit)}</b><small>${esc(u.region)} · ${u.strength} personnel</small></td><td><span class="signal ${signal==='Steady'?'steady':signal==='Monitor'?'watch':'high'}">${signal}</span></td>
+      <td><b>${u.workload.overtime_per_person}h</b><small>${u.workload.overtime_hours}h total</small></td><td>${u.workload.leave_denials}</td><td>${u.workload.incidents}</td>
+      <td>${u.pulse.avg_stress===null?'<span class="sup">Below 5 responses</span>':`<b>${u.pulse.avg_stress}/10</b><small>${u.pulse.avg_sleep}h sleep · ${u.pulse.respondents} responses</small>`}</td></tr>`;
+  }).join('')}</tbody>`;
+  if (!rows.length) $('#unit-table').innerHTML='<tbody><tr><td class="empty-state">No units match these filters.</td></tr></tbody>';
 }
 function drawTrend(cv, trend) {
   const ctx = cv.getContext('2d');
@@ -356,28 +423,58 @@ function drawTrend(cv, trend) {
   ctx.fillText('elevated support priority', padL + 6, Y(Math.max(...trend.map(t => t.flagged))) - 6);
 }
 $('#recalc').onclick = async () => {
-  const j = await api('/api/recalculate', { method: 'POST' });
-  toast(`Engine run: ${j.counts.Low} low · ${j.counts.Watch} watch · ${j.counts.Elevated} elevated · ${j.counts.Critical} critical`);
-  loadWelfare();
+  try { const j = await api('/api/recalculate', { method: 'POST' });
+    toast(`Updated · ${j.counts.Elevated+j.counts.Critical} priority cases`); loadWelfare();
+  } catch(e) { toast(e.message); }
 };
 
+let welfareData=null, wfCaseLimit=8, wfRosterLimit=12;
 async function loadWelfare() {
-  const [al,ro,ov]=await Promise.all([api('/api/alerts'),api('/api/dashboard/roster'),api('/api/welfare/overview')]);
-  const open=al.alerts.filter(a=>a.status==='new'||a.status==='acknowledged');
-  $('#wf-summary').innerHTML=`<div><span>Open alerts</span><b>${open.length}</b><small>requiring triage</small></div><div><span>Critical priority</span><b>${ov.bands.Critical||0}</b><small>human review required</small></div><div><span>Active support plans</span><b>${(ov.interventions.recommended||0)+(ov.interventions.accepted||0)}</b><small>recommended or accepted</small></div><div><span>Data-review requests</span><b>${ov.corrections.length}</b><small>personnel submitted</small></div>`;
-  const renderCases=()=>{const list=$('#case-filter').value==='open'?open:al.alerts;$('#alerts-list').innerHTML=list.length?list.map(a=>`<article class="case-row"><div class="case-top"><span class="priority ${a.level.toLowerCase()}">${a.level}</span><time>${a.created_at.slice(0,10)}</time></div><h4>${esc(a.rank)} ${esc(a.name)}</h4><p>${esc(a.unit)} · ${esc(a.reason.replace(/^.*?:\s*/,''))}</p><div><button class="text-button" data-action="open-person" data-pid="${a.personnel_id}">Open support record →</button>${a.status==='new'?`<button class="text-button" data-action="alert" data-id="${a.id}" data-status="acknowledged">Mark reviewed</button>`:''}</div></article>`).join(''):'<p class="empty-state">No cases in this queue.</p>';};
-  renderCases();$('#case-filter').onchange=renderCases;
-  $('#correction-queue').innerHTML=ov.corrections.length?ov.corrections.map(c=>`<article class="request-card"><span>${esc(c.category)} · ${esc(c.status)}</span><h4>${esc(c.rank)} ${esc(c.name)}</h4><p>${esc(c.message)}</p>${c.status==='submitted'?`<button class="text-button" data-action="correction" data-status="reviewing" data-id="${c.id}" data-pid="${c.personnel_id}">Start review →</button>`:`<button class="text-button" data-action="correction" data-status="resolved" data-id="${c.id}" data-pid="${c.personnel_id}">Resolve with note →</button>`}</article>`).join(''):'<p class="empty-state">No pending requests.</p>';
-  $('#roster').innerHTML=ro.roster.length?`<div class="roster-head"><span>Person</span><span>Unit</span><span>Priority</span><span>Contributing evidence</span><span></span></div>`+ro.roster.map(p=>`<button class="roster-line" data-action="open-person" data-pid="${p.id}"><span><b>${esc(p.rank)} ${esc(p.name)}</b><small>${esc(p.force_id)}</small></span><span>${esc(p.unit)}</span><span class="priority ${p.band.toLowerCase()}">${p.band}</span><span>${p.factors.slice(0,2).map(f=>esc(f.label)).join(' · ')}</span><i>→</i></button>`).join(''):'<p class="empty-state">No priority cases right now.</p>';
+  $('#wf-updated').textContent='Loading…';
+  try {
+    const [al,ro,ov]=await Promise.all([api('/api/alerts'),api('/api/dashboard/roster'),api('/api/welfare/overview')]);
+    welfareData={alerts:al.alerts,roster:ro.roster,overview:ov}; wfCaseLimit=8; wfRosterLimit=12;
+    const open=al.alerts.filter(a=>['new','acknowledged'].includes(a.status));
+    $('#wf-summary').innerHTML=`<div><span>Open cases</span><b>${open.length}</b><small>${open.filter(a=>a.status==='new').length} new</small></div><div><span>Critical</span><b>${ov.bands.Critical||0}</b><small>review first</small></div><div><span>Active plans</span><b>${(ov.interventions.recommended||0)+(ov.interventions.accepted||0)}</b><small>in progress</small></div><div><span>Record reviews</span><b>${ov.corrections.length}</b><small>waiting</small></div>`;
+    const units=[...new Set(ro.roster.map(p=>p.unit))].sort();
+    $('#roster-unit').innerHTML='<option value="all">All units</option>'+units.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('');
+    for(const id of ['wf-search','case-filter','case-level']) $(`#${id}`).oninput=()=>{wfCaseLimit=8;renderWelfareCases();};
+    for(const id of ['roster-search','roster-band','roster-unit']) $(`#${id}`).oninput=()=>{wfRosterLimit=12;renderWelfareRoster();};
+    renderWelfareCases(); renderWelfareRoster();
+    $('#correction-count').textContent=ov.corrections.length;
+    $('#correction-queue').innerHTML=ov.corrections.length?ov.corrections.map(c=>`<article class="request-card"><span>${esc(c.category)} · ${esc(c.status)}</span><h4>${esc(c.rank)} ${esc(c.name)}</h4><p>${esc(c.message)}</p>${c.status==='submitted'?`<button class="text-button" data-action="correction" data-status="reviewing" data-id="${c.id}" data-pid="${c.personnel_id}">Start review →</button>`:`<button class="text-button" data-action="correction" data-status="resolved" data-id="${c.id}" data-pid="${c.personnel_id}">Resolve →</button>`}</article>`).join(''):'<p class="empty-state">Nothing waiting.</p>';
+    $('#wf-updated').textContent=`Updated ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`;
+  } catch(e) {
+    $('#wf-updated').textContent='Load failed';
+    $('#alerts-list').innerHTML=`<p class="load-error">${esc(e.message)}</p>`;
+  }
+}
+function renderWelfareCases(){
+  if(!welfareData)return;
+  const q=$('#wf-search').value.trim().toLowerCase(), status=$('#case-filter').value, level=$('#case-level').value;
+  let list=welfareData.alerts.filter(a=>{
+    const statusOk=status==='all'||(status==='open'&&['new','acknowledged'].includes(a.status))||(status==='closed'&&['actioned','dismissed'].includes(a.status))||a.status===status;
+    return statusOk&&(level==='all'||a.level===level)&&(!q||`${a.name} ${a.rank} ${a.force_id} ${a.unit}`.toLowerCase().includes(q));
+  });
+  $('#case-count').textContent=`${list.length} cases`;
+  const shown=list.slice(0,wfCaseLimit);
+  $('#alerts-list').innerHTML=shown.length?shown.map(a=>`<article class="case-row"><div class="case-top"><span class="priority ${a.level.toLowerCase()}">${a.level}</span><time>${esc(a.status)} · ${a.created_at.slice(0,10)}</time></div><h4>${esc(a.rank)} ${esc(a.name)}</h4><p>${esc(a.unit)} · ${esc(a.reason.replace(/^.*?:\s*/,''))}</p><div><button class="text-button" data-action="open-person" data-pid="${a.personnel_id}">Open case →</button>${a.status==='new'?`<button class="text-button" data-action="alert" data-id="${a.id}" data-status="acknowledged">Mark reviewed</button>`:''}</div></article>`).join('')+(list.length>wfCaseLimit?`<button class="load-more" data-action="expand-cases">Show ${Math.min(8,list.length-wfCaseLimit)} more</button>`:''):'<p class="empty-state">No matching cases.</p>';
+}
+function renderWelfareRoster(){
+  if(!welfareData)return;
+  const q=$('#roster-search').value.trim().toLowerCase(), band=$('#roster-band').value, unit=$('#roster-unit').value;
+  const list=welfareData.roster.filter(p=>(band==='all'||p.band===band)&&(unit==='all'||p.unit===unit)&&(!q||`${p.name} ${p.rank} ${p.force_id} ${p.unit} ${p.factors.map(f=>f.label).join(' ')}`.toLowerCase().includes(q)));
+  $('#roster-count').textContent=`${list.length} people`; $('#roster-filter-summary').textContent=`${Math.min(list.length,wfRosterLimit)} shown`;
+  $('#roster').innerHTML=list.length?`<div class="roster-head"><span>Person</span><span>Unit</span><span>Priority</span><span>Top evidence</span><span></span></div>`+list.slice(0,wfRosterLimit).map(p=>`<button class="roster-line" data-action="open-person" data-pid="${p.id}"><span><b>${esc(p.rank)} ${esc(p.name)}</b><small>${esc(p.force_id)}</small></span><span>${esc(p.unit)}</span><span class="priority ${p.band.toLowerCase()}">${p.band}</span><span>${p.factors.slice(0,2).map(f=>esc(f.label)).join(' · ')}</span><i>→</i></button>`).join('')+(list.length>wfRosterLimit?`<button class="load-more" data-action="expand-roster">Show ${Math.min(12,list.length-wfRosterLimit)} more</button>`:''):'<p class="empty-state">No matching personnel.</p>';
 }
 async function reviewCorrection(id,pid,status){
   const note=await askNote({title:status==='resolved'?'Resolve data-review request':'Start data review',help:status==='resolved'?'Record what was checked and the outcome.':'Add an initial review note (optional).',confirm:status==='resolved'?'Resolve request':'Start review',required:status==='resolved'});
   if(note===null)return;await api('/api/data-corrections/'+id,{method:'POST',body:JSON.stringify({status,resolution_note:note})});toast(status==='resolved'?'Request resolved':'Request marked for review');loadWelfare();
 }
 async function actAlert(id, status) {
-  await api('/api/alerts/' + id, { method: 'POST', body: JSON.stringify({ status }) });
-  toast('Alert ' + status);
-  loadWelfare();
+  try { await api('/api/alerts/' + id, { method: 'POST', body: JSON.stringify({ status }) });
+    toast(status === 'acknowledged' ? 'Case marked reviewed' : 'Case updated'); loadWelfare();
+  } catch(e) { toast(e.message); }
 }
 $('#back-welfare').onclick = () => showView(me.role === 'welfare' ? 'welfare' : 'commander');
 
@@ -415,56 +512,37 @@ async function openPerson(pid) {
     </div>
     <div class="card wide"><h3>Interventions on record</h3><div id="ivs"></div></div>`;
   drawSpark($('#p-chart'), j.checkins.slice(-30).map(c => c.stress));
-  renderRecs(r.factors, pid);
+  renderRecs(j.recommendations || [], pid);
   $('#ivs').innerHTML = j.interventions.map(iv => `
     <div class="int-row">
       <span><b>${esc(iv.type.replace(/_/g, ' '))}</b> — ${esc(iv.reason)} <span class="muted">(${esc(iv.status)})</span></span>
       ${['recommended','accepted'].includes(iv.status) ? `<span>
-        ${iv.status==='recommended'?`<button class="btn small" data-action="intervention" data-id="${iv.id}" data-status="accepted" data-pid="${pid}">Mark accepted</button>`:''}
-        <button class="btn small primary" data-action="intervention" data-id="${iv.id}" data-status="completed" data-pid="${pid}">Complete with note</button>
+        ${iv.status==='recommended'?`<button class="btn small primary" data-action="intervention" data-id="${iv.id}" data-status="accepted" data-pid="${pid}">Accept plan</button>`:`<button class="btn small primary" data-action="intervention" data-id="${iv.id}" data-status="completed" data-pid="${pid}">Complete</button>`}
         <button class="btn small ghost" data-action="intervention" data-id="${iv.id}" data-status="declined" data-pid="${pid}">Declined</button></span>` : ''}
     </div>`).join('') || '<p class="muted">No interventions recorded yet.</p>';
 }
-function renderRecs(factors, pid) {
-  const MAP = {
-    incidents: ['counseling', 'Recent incident exposure — offer voluntary trauma-informed counseling'],
-    stress_trend: ['counseling', 'Sustained/rising stress — voluntary counseling session'],
-    assessment: ['counseling', 'Wellness assessment above threshold — professional follow-up'],
-    sleep: ['medical_check', 'Sleep degradation — medical/behavioural sleep evaluation'],
-    overtime: ['workload_rebalance', 'Sustained overtime — rebalance duty roster'],
-    deployment: ['rest_rotation', 'Prolonged deployment — schedule rest rotation'],
-    family_sep: ['family_leave', 'Extended family separation — prioritize family travel leave'],
-    leave_denials: ['family_leave', 'Multiple denied leave requests — review leave priority'],
-    transfers: ['peer_support', 'Instability from transfers — peer-support network']
-  };
-  const seen = new Set(), recs = [];
-  factors.forEach(f => {
-    const m = MAP[f.key];
-    if (m && !seen.has(m[0])) { seen.add(m[0]); recs.push({ type: m[0], reason: m[1] }); }
-  });
-  if (!recs.length) recs.push({ type: 'peer_support', reason: 'Preventive welfare check-in' });
-  $('#recs').innerHTML = recs.slice(0, 4).map((r, i) => `
+function renderRecs(recs, pid) {
+  $('#recs').innerHTML = recs.length ? recs.slice(0, 4).map((r, i) => `
     <div class="int-row">
-      <span>✅ <b>${r.type.replace(/_/g, ' ')}</b> — ${r.reason}</span>
+      <span><b>${esc(r.type.replace(/_/g, ' '))}</b> — ${esc(r.reason)}</span>
       <button class="btn small primary" data-action="recommend" data-pid="${pid}" data-index="${i}">Recommend this</button>
-    </div>`).join('');
+    </div>`).join('') : '<p class="muted">No new intervention suggested by current evidence.</p>';
   $('#recs').dataset.recs = JSON.stringify(recs.slice(0, 4));
 }
 async function applyRecs(pid, idx) {
   const recs = JSON.parse($('#recs').dataset.recs);
-  await api('/api/recalculate', { method: 'POST' }).catch(() => {});
-  // attach via alert-less path: create intervention directly through alerts API needs an alert;
-  // use dedicated endpoint instead
-  await api('/api/interventions/recommend', { method: 'POST', body: JSON.stringify({ personnel_id: pid, recs: [recs[idx]] }) });
-  toast('Intervention recommended');
-  openPerson(pid);
+  try {
+    await api('/api/interventions/recommend', { method: 'POST', body: JSON.stringify({ personnel_id: pid, type: recs[idx].type }) });
+    toast('Support plan recommended'); openPerson(pid);
+  } catch(e) { toast(e.message); }
 }
 async function setIv(id, status, pid) {
-  const outcome_note=status==='completed'?await askNote({title:'Complete support plan',help:'Record the action taken and any agreed follow-up. Avoid unnecessary clinical detail.',confirm:'Mark complete',required:true}):'';
-  if(status==='completed'&&outcome_note===null)return;
-  await api('/api/interventions/' + id, { method: 'POST', body: JSON.stringify({ status, outcome_note }) });
-  toast('Intervention ' + status);
-  if(pid) openPerson(pid);
+  const needsNote=['completed','declined'].includes(status);
+  const outcome_note=needsNote?await askNote({title:status==='completed'?'Complete support plan':'Decline support plan',help:'Add a brief outcome. Avoid unnecessary clinical detail.',confirm:status==='completed'?'Mark complete':'Mark declined',required:true}):'';
+  if(needsNote&&outcome_note===null)return;
+  try { await api('/api/interventions/' + id, { method: 'POST', body: JSON.stringify({ status, outcome_note }) });
+    toast('Support plan ' + status); if(pid) openPerson(pid);
+  } catch(e) { toast(e.message); }
 }
 
 // CSP-safe delegated actions for content rendered after API responses.
@@ -476,6 +554,8 @@ document.addEventListener('click', e => {
   if(b.dataset.action==='correction') reviewCorrection(id,pid,b.dataset.status);
   if(b.dataset.action==='recommend') applyRecs(pid,Number(b.dataset.index));
   if(b.dataset.action==='intervention') setIv(id,b.dataset.status,pid);
+  if(b.dataset.action==='expand-cases'){wfCaseLimit+=8;renderWelfareCases();}
+  if(b.dataset.action==='expand-roster'){wfRosterLimit+=12;renderWelfareRoster();}
 });
 
 /* ==== private journal (merged from seven50) ==== */
@@ -530,36 +610,120 @@ $('#jr-editor').addEventListener('input', () => {
 });
 window.addEventListener('beforeunload', () => { if (jrDirty) saveJournal(true); });
 
-/* ---- voice dictation (Web Speech API — free browser engine, no API keys) ---- */
+/* ---- voice dictation (Web Speech API — browser-provided, no app API key) ---- */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-let jrRec = null, jrListening = false;
+const JR_MIC_MAX_RESTARTS = 2;
+const JR_MIC_DUPLICATE_MS = 8000;
+let jrRec = null, jrListening = false, jrMicSession = 0, jrMicRun = 0;
+let jrMicRestarts = 0, jrMicRestartTimer = null;
+let jrMicHandledResults = new Set(), jrMicRecentFinals = [];
+
+function jrSetMicUi(active, status = '') {
+  const mic = $('#jr-mic');
+  mic.classList.toggle('recording', active);
+  mic.setAttribute('aria-pressed', String(active));
+  mic.textContent = active ? '⏹ Stop' : '🎤 Speak';
+  $('#jr-mic-status').textContent = status;
+}
+
+function jrFinalFingerprint(text) {
+  return (text || '').normalize('NFKC').toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+function jrIsRepeatedFinal(text) {
+  const now = Date.now(), fingerprint = jrFinalFingerprint(text);
+  if (!fingerprint) return true;
+  jrMicRecentFinals = jrMicRecentFinals.filter(x => now - x.at < JR_MIC_DUPLICATE_MS);
+  if (jrMicRecentFinals.some(x => x.fingerprint === fingerprint)) return true;
+  jrMicRecentFinals.push({ fingerprint, at: now });
+  return false;
+}
+
+function jrHandleFinal(session, run, resultIndex, alternative) {
+  if (session !== jrMicSession) return false;
+  const resultKey = `${run}:${resultIndex}`;
+  if (jrMicHandledResults.has(resultKey)) return false;
+  jrMicHandledResults.add(resultKey);
+
+  const transcript = alternative && alternative.transcript;
+  if (jrIsRepeatedFinal(transcript)) {
+    $('#jr-mic-status').textContent = 'Duplicate ignored · listening';
+    return true;
+  }
+  jrRouteHeard(transcript, alternative && alternative.confidence);
+  return true;
+}
+
+function jrBeginRecognition(session) {
+  if (!jrListening || session !== jrMicSession) return;
+  const run = ++jrMicRun, rec = new SR();
+  let terminalError = false;
+  rec.continuous = true;
+  rec.interimResults = true;
+  rec.lang = $('#jr-lang').value;
+  jrRec = rec;
+
+  rec.onstart = () => {
+    if (jrListening && session === jrMicSession) jrSetMicUi(true, 'Listening…');
+  };
+  rec.onresult = e => {
+    if (session !== jrMicSession) return;
+    let interim = '', handledFinal = false;
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const result = e.results[i], alternative = result[0];
+      if (result.isFinal) handledFinal = jrHandleFinal(session, run, i, alternative) || handledFinal;
+      else if (jrListening) interim += alternative.transcript;
+    }
+    if (jrListening && interim.trim()) $('#jr-mic-status').textContent = '… ' + interim.trim();
+    else if (jrListening && !handledFinal) $('#jr-mic-status').textContent = 'Listening…';
+  };
+  rec.onerror = ev => {
+    if (session !== jrMicSession) return;
+    if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
+      terminalError = true;
+      jrStopMic('Microphone blocked. Check browser permission.');
+    } else if (ev.error === 'audio-capture') {
+      terminalError = true;
+      jrStopMic('No microphone found.');
+    } else if (ev.error === 'network') {
+      terminalError = true;
+      jrStopMic('Voice service unavailable. Try again.');
+    } else if (ev.error === 'no-speech' && jrListening) {
+      $('#jr-mic-status').textContent = 'No speech heard…';
+    } else if (ev.error !== 'aborted') {
+      terminalError = true;
+      jrStopMic('Voice stopped. Tap Speak to retry.');
+    }
+  };
+  rec.onend = () => {
+    if (rec === jrRec) jrRec = null;
+    if (terminalError || !jrListening || session !== jrMicSession) return;
+    if ($('#view-journal').classList.contains('hidden')) return jrStopMic();
+    if (jrMicRestarts >= JR_MIC_MAX_RESTARTS) {
+      jrListening = false;
+      jrSetMicUi(false, 'Voice paused. Tap Speak to continue.');
+      return;
+    }
+    jrMicRestarts += 1;
+    $('#jr-mic-status').textContent = 'Reconnecting…';
+    jrMicRestartTimer = setTimeout(() => jrBeginRecognition(session), 400);
+  };
+
+  try {
+    rec.start();
+  } catch {
+    if (session !== jrMicSession) return;
+    jrRec = null;
+    jrListening = false;
+    jrSetMicUi(false, 'Could not start voice. Tap to retry.');
+  }
+}
 
 if (!SR) {
   $('#jr-mic').disabled = true;
   $('#jr-mic').title = 'Voice input needs Chrome, Edge, or Safari';
-} else {
-  jrRec = new SR();
-  jrRec.continuous = true;
-  jrRec.interimResults = true;
-
-  jrRec.onresult = e => {
-    let interim = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      const t = e.results[i][0].transcript;
-      if (e.results[i].isFinal) jrRouteHeard(t, e.results[i][0].confidence);
-      else interim += t;
-    }
-    $('#jr-mic-status').textContent = jrListening ? (interim ? '… ' + interim : 'listening…') : '';
-  };
-  jrRec.onend = () => { if (jrListening) { try { jrRec.start(); } catch {} } }; // resume after silence pauses
-  jrRec.onerror = ev => {
-    if (ev.error === 'not-allowed') {
-      jrStopMic();
-      $('#jr-mic-status').textContent = '⚠ microphone blocked — allow mic access in your browser';
-    } else if (ev.error !== 'no-speech' && ev.error !== 'aborted') {
-      $('#jr-mic-status').textContent = '⚠ mic error: ' + ev.error;
-    }
-  };
+  $('#jr-mic-status').textContent = 'Voice is not supported in this browser.';
 }
 
 /* smart ASR corrector: fixes the most common speech-to-text mistakes */
@@ -590,14 +754,15 @@ const CONF_AUTO = 0.75;
 function jrRouteHeard(text, conf) {
   const c = (typeof conf === 'number' && conf > 0) ? conf : 0.9; // engines without confidence -> trust
   const fixed = voiceFix(text);
+  if (!fixed) return;
   if (c >= CONF_AUTO) {
     jrAppendSpoken(fixed);
-    $('#jr-mic-status').textContent = '✓ added: ' + (fixed.length > 60 ? fixed.slice(0, 57) + '…' : fixed);
+    $('#jr-mic-status').textContent = 'Added · listening';
   } else {
     const d = $('#jr-draft');
     d.value = (d.value ? d.value + ' ' : '') + fixed;
     $('#jr-draft-wrap').classList.remove('hidden');
-    $('#jr-mic-status').textContent = '⚠ low confidence — check the review box below';
+    $('#jr-mic-status').textContent = 'Review needed · listening';
   }
 }
 
@@ -616,43 +781,50 @@ $('#jr-draft-ok').addEventListener('click', () => {
   const d = $('#jr-draft');
   if (d.value.trim()) { jrAppendSpoken(voiceFix(d.value)); d.value = ''; }
   $('#jr-draft-wrap').classList.add('hidden');
-  $('#jr-mic-status').textContent = '✓ reviewed text added to journal';
+  $('#jr-mic-status').textContent = jrListening ? 'Added · listening' : 'Added';
 });
 $('#jr-draft-no').addEventListener('click', () => {
   $('#jr-draft').value = '';
   $('#jr-draft-wrap').classList.add('hidden');
-  $('#jr-mic-status').textContent = 'discarded — nothing was added';
+  $('#jr-mic-status').textContent = jrListening ? 'Discarded · listening' : 'Discarded';
 });
 
-function jrStopMic() {
+function jrStopMic(status = '') {
   jrListening = false;
-  $('#jr-mic').classList.remove('recording');
-  $('#jr-mic').textContent = '🎤 Speak';
-  $('#jr-mic-status').textContent = '';
-  try { if (jrRec) jrRec.stop(); } catch {}
+  clearTimeout(jrMicRestartTimer);
+  jrMicRestartTimer = null;
+  const rec = jrRec;
+  jrRec = null;
+  jrSetMicUi(false, status);
+  try { if (rec) rec.stop(); } catch {}
+}
+
+function jrStartMic() {
+  if (!SR) { toast('Voice input works in Chrome, Edge, or Safari'); return; }
+  clearTimeout(jrMicRestartTimer);
+  jrMicSession += 1;
+  jrMicRestarts = 0;
+  jrMicHandledResults = new Set();
+  jrMicRecentFinals = [];
+  jrListening = true;
+  localStorage.setItem('sentinel-jr-lang', $('#jr-lang').value);
+  jrSetMicUi(true, 'Starting…');
+  jrBeginRecognition(jrMicSession);
 }
 
 $('#jr-mic').addEventListener('click', () => {
-  if (!SR) { toast('Voice input works in Chrome, Edge, or Safari'); return; }
   if (jrListening) return jrStopMic();
-  jrRec.lang = $('#jr-lang').value;
-  localStorage.setItem('sentinel-jr-lang', jrRec.lang);
-  try { jrRec.start(); } catch { return; }
-  jrListening = true;
-  $('#jr-mic').classList.add('recording');
-  $('#jr-mic').textContent = '⏹ Stop';
-  $('#jr-mic-status').textContent = 'listening… speak naturally';
+  jrStartMic();
 });
 $('#jr-lang').addEventListener('change', () => {
   localStorage.setItem('sentinel-jr-lang', $('#jr-lang').value);
-  if (jrListening) { jrStopMic(); setTimeout(() => $('#jr-mic').click(), 250); }
+  if (jrListening) jrStopMic('Language changed. Tap Speak.');
 });
 /* restore remembered language (most "wrong listening" = wrong language selected) */
 (() => {
   const saved = localStorage.getItem('sentinel-jr-lang');
   if (saved && [...$('#jr-lang').options].some(o => o.value === saved)) {
     $('#jr-lang').value = saved;
-    if (saved !== 'en-IN') $('#jr-mic-status').textContent = 'language: ' + $('#jr-lang').selectedOptions[0].textContent;
   }
 })();
 
