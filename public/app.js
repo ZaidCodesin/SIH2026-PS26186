@@ -55,7 +55,15 @@ let sessionEnding = false;
 async function api(url, options = {}) {
   const { silentAuth = false, ...fetchOptions } = options;
   const headers = { 'Content-Type': 'application/json', ...(fetchOptions.headers || {}) };
-  const response = await fetch(url, { credentials: 'same-origin', ...fetchOptions, headers });
+  let response;
+  try {
+    response = await fetch(url, { credentials: 'same-origin', ...fetchOptions, headers });
+  } catch (cause) {
+    const error = new Error('Cannot reach the SENTINEL service. Restart the local server and reload this page.');
+    error.cause = cause;
+    error.status = 0;
+    throw error;
+  }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     if (response.status === 401 && me && !silentAuth && !sessionEnding) {
@@ -267,9 +275,10 @@ $('#signup-back').addEventListener('click', () => {
 async function login(username, password) {
   me = await api('/api/login', { method: 'POST', body: JSON.stringify({ username, password }), silentAuth: true });
   if (chosenPortal && me.role !== chosenPortal) {
+    const actualRole = me.role;
     await api('/api/logout', { method: 'POST', silentAuth: true });
     me = null;
-    throw new Error(`This account belongs to the ${titleCase(me?.role || 'other')} workspace. Choose the matching demo.`);
+    throw new Error(`This account belongs to the ${titleCase(actualRole)} workspace. Choose the matching demo.`);
   }
   boot();
 }
