@@ -167,10 +167,10 @@
       <p class="muted">Your writing is excluded from commander, welfare and risk views.</p>
       <div class="jr-progress"><div id="jr-bar"></div></div>
       <p id="jr-count" class="muted" style="margin:6px 0">0 / 750 words</p>
-      <textarea id="jr-editor" placeholder="Write about your day, your thoughts, anything on your mind…"></textarea>
-      <div class="jr-voice">
-        <button id="jr-mic" class="mic-btn" title="Voice input" aria-pressed="false">🎤 Speak</button>
+            <div class="jr-voice">
+        <button id="jr-mic" class="mic-btn" title="Tap to speak" aria-pressed="false" aria-label="Start voice input">🎤</button>
         <select id="jr-lang" title="Speech language">
+          <option value="auto">🌐 Auto — detect language</option>
           <option value="en-IN">English (India)</option>
           <option value="hi-IN">हिन्दी — Hindi</option>
           <option value="bn-IN">বাংলা — Bengali</option>
@@ -186,6 +186,8 @@
         </select>
         <span id="jr-mic-status" class="muted"></span>
       </div>
+      <textarea id="jr-editor" placeholder="Write about your day, your thoughts, anything on your mind…"></textarea>
+
       <div id="jr-draft-wrap" class="jr-draft-wrap hidden">
         <label for="jr-draft">Check this phrase before adding it:</label>
         <textarea id="jr-draft" rows="2" placeholder="what the mic heard will appear here…"></textarea>
