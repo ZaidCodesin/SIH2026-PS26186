@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node server.js",
     "seed": "node lib/seed.js",
-    "test": "node test-regression.js"
+    "check": "node --check server.js && node --check public/app.js",
+    "test": "node test-regression.js",
+    "verify": "npm run check && npm test"
   },
   "dependencies": {
     "express": "^4.19.2"

@@ -1,295 +1,227 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SENTINEL — Personnel Welfare Monitoring</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>SENTINEL — Predictive Personnel Welfare</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div id="login-view" class="public-shell">
+    <header class="public-header">
+      <a class="brand" href="#" aria-label="SENTINEL home"><span class="brand-mark" aria-hidden="true">S</span><span><strong>SENTINEL</strong><small>Personnel welfare system</small></span></a>
+      <button class="icon-button theme-toggle" type="button" data-theme-toggle aria-label="Switch color theme"><span aria-hidden="true">◐</span></button>
+    </header>
 
-<button id="theme-toggle" aria-label="Switch color theme" title="Switch color theme"><span class="theme-icon">◐</span></button>
-
-<!-- INSTITUTIONAL ACCESS -->
-<div id="login-view" class="public-shell">
-  <header class="public-nav"><div class="brand-mark"><span>S</span><div><b>SENTINEL</b><small>Personnel welfare system</small></div></div></header>
-  <main class="access-layout">
-    <section class="access-intro">
-      <h1>See work pressure earlier.<br><span>Respond with care.</span></h1>
-      <p class="lead">Workload and voluntary wellbeing signals in one place — private reflections stay private.</p>
-    </section>
-    <section class="access-panel">
-      <div id="portal-choice">
-        <h2>Choose your workspace</h2>
-        <button class="portal-row" data-portal="personnel"><span class="portal-icon">P</span><span><b>Personnel</b><small>Check in, assess and journal</small></span><i>→</i></button>
-        <button class="portal-row" data-portal="welfare"><span class="portal-icon">W</span><span><b>Welfare Officer</b><small>Triage and coordinate support</small></span><i>→</i></button>
-        <button class="portal-row" data-portal="commander"><span class="portal-icon">C</span><span><b>Commander</b><small>Compare unit conditions</small></span><i>→</i></button>
-      </div>
-      <div id="signin-form" class="hidden">
-        <button id="portal-back" class="text-button">← Change workspace</button>
-        <p id="portal-label" class="eyebrow"></p><h2>Sign in</h2>
-        <label for="li-user">Service ID / username</label><input id="li-user" autocomplete="username">
-        <label for="li-pass">Password</label><input id="li-pass" type="password" autocomplete="current-password">
-        <button id="li-btn" class="btn primary">Sign in</button>
-        <p id="li-err" class="error hidden"></p>
-        <button id="show-signup" class="text-button">New personnel? Create an account →</button>
-        <details class="demo-access"><summary>Sample accounts</summary><div id="demo-options"></div><p>Any seeded service ID (<code>CRPF100001</code>–<code>CRPF100150</code>) works with password <code>demo123</code></p></details>
-      </div>
-      <div id="signup-form" class="hidden">
-        <button id="signup-back" class="text-button">← Back to sign in</button>
-        <p class="eyebrow">Personnel workspace</p><h2>Create your account</h2>
-        <label for="su-name">Full name</label><input id="su-name" maxlength="80" autocomplete="name">
-        <label for="su-id">Service ID</label><input id="su-id" maxlength="20" autocomplete="off" placeholder="e.g. CRPF100999">
-        <label for="su-rank">Rank</label><select id="su-rank"></select>
-        <label for="su-unit">Unit</label><select id="su-unit"></select>
-        <label for="su-newunit">Or create a new unit <span class="muted">(optional)</span></label><input id="su-newunit" maxlength="60" autocomplete="off">
-        <label for="su-pass">Password</label><input id="su-pass" type="password" autocomplete="new-password" placeholder="8+ characters, letters and numbers">
-        <button id="su-btn" class="btn primary">Create account</button>
-        <p id="su-err" class="error hidden"></p>
-      </div>
-    </section>
-  </main>
-  <footer class="public-footer"><span>SENTINEL</span><span>Private journals stay outside organizational analytics</span></footer>
-</div>
-
-<!-- APP -->
-<div id="app-view" class="hidden">
-  <header>
-    <div class="logo small"><span class="app-monogram">S</span> SENTINEL</div>
-    <nav id="nav"></nav>
-    <div class="hdr-right">
-      <span id="who" class="muted"></span>
-      <button id="logout" class="btn ghost">Logout</button>
-    </div>
-  </header>
-  <div id="banner" class="banner hidden"></div>
-
-  <main id="view-dashboard" class="view hidden">
-    <div class="view-heading"><div><p class="eyebrow">Personal workspace</p><h1>Your wellbeing, in context</h1><p>See work records and check-ins side by side.</p></div><span class="scope-note">Visible to you</span></div>
-    <div id="my-tiles" class="tiles"></div>
-    <section id="work-feeling" class="context-panel"></section>
-    <div class="cols">
-      <section class="card">
-        <h3>Daily wellness check-in</h3>
-        <p class="muted">Optional · confidential · never disciplinary.</p>
-        <label>Stress level today: <b id="v-stress">5</b>/10</label>
-        <input type="range" id="ci-stress" min="1" max="10" value="5">
-        <label>Sleep last night (hours)</label>
-        <input type="number" id="ci-sleep" min="0" max="14" step="0.5" value="7">
-        <label>Mood</label>
-        <select id="ci-mood">
-          <option>good</option><option>okay</option><option>tired</option>
-          <option>stressed</option><option>low</option><option>anxious</option><option>motivated</option>
-        </select>
-        <label class="chk"><input type="checkbox" id="ci-sym"> Physical symptoms (headache, fatigue, body pain)</label>
-        <label>Feeling supported by the organisation (1–5)</label>
-        <input type="number" id="ci-sup" min="1" max="5" value="3">
-        <button id="ci-save" class="btn primary">Submit check-in</button>
-        <p id="ci-msg" class="okmsg hidden"></p>
+    <main class="access-layout">
+      <section class="access-intro" aria-labelledby="welcome-title">
+        <p class="eyebrow">Privacy-preserving decision support</p>
+        <h1 id="welcome-title">See pressure earlier.<br><span>Respond with care.</span></h1>
+        <p class="lead">One connected system for private reflection, appropriate welfare support, and better organizational conditions.</p>
+        <ul class="trust-list" aria-label="SENTINEL privacy commitments">
+          <li><span aria-hidden="true">✓</span> Private journals remain personnel-only</li>
+          <li><span aria-hidden="true">✓</span> Welfare receives only authorized support context</li>
+          <li><span aria-hidden="true">✓</span> Command sees conditions, never case files</li>
+        </ul>
       </section>
-      <section class="card">
-        <h3>My stress trend</h3>
-        <canvas id="my-chart" width="560" height="160"></canvas>
-        <h3 style="margin-top:14px">Record access</h3>
-        <div id="my-access" class="access-log"></div>
-        <div class="helpline">
-          📞 <b>Need support now?</b> KIRAN: <b>1800-599-0019</b>
+
+      <section class="access-panel" aria-labelledby="demo-title">
+        <div id="portal-choice">
+          <p class="eyebrow">Explore demo</p>
+          <h2 id="demo-title">Choose a demo workspace</h2>
+          <p class="demo-notice">Demo environment — production access is role-authenticated.</p>
+          <button class="portal-row" type="button" data-portal="personnel"><span class="portal-icon" aria-hidden="true">P</span><span><strong>Personnel Demo</strong><small>Reflect, check in, and control sharing</small></span><span aria-hidden="true">→</span></button>
+          <button class="portal-row" type="button" data-portal="welfare"><span class="portal-icon" aria-hidden="true">W</span><span><strong>Welfare Officer Demo</strong><small>Coordinate support and follow-up</small></span><span aria-hidden="true">→</span></button>
+          <button class="portal-row" type="button" data-portal="commander"><span class="portal-icon" aria-hidden="true">C</span><span><strong>Commander Demo</strong><small>Improve unit conditions</small></span><span aria-hidden="true">→</span></button>
         </div>
+
+        <form id="signin-form" class="hidden" novalidate>
+          <button id="portal-back" class="text-button" type="button">← Change demo</button>
+          <p id="portal-label" class="eyebrow"></p>
+          <h2>Sign in</h2>
+          <label for="li-user">Service ID or username</label>
+          <input id="li-user" autocomplete="username" required>
+          <label for="li-pass">Password</label>
+          <input id="li-pass" type="password" autocomplete="current-password" required>
+          <button id="li-btn" class="button primary full" type="submit">Sign in</button>
+          <p id="li-err" class="form-message error hidden" role="alert"></p>
+          <button id="show-signup" class="text-button signup-link" type="button">New personnel? Create a demo account →</button>
+          <details class="demo-access"><summary>Demo credentials</summary><div id="demo-options"></div><p>Seeded IDs <code>CRPF100001</code>–<code>CRPF100150</code> use <code>demo123</code>.</p></details>
+        </form>
+
+        <form id="signup-form" class="hidden" novalidate>
+          <button id="signup-back" class="text-button" type="button">← Back to sign in</button>
+          <p class="eyebrow">Personnel demo</p>
+          <h2>Create a demo account</h2>
+          <label for="su-name">Full name</label><input id="su-name" maxlength="80" autocomplete="name" required>
+          <label for="su-id">Service ID</label><input id="su-id" maxlength="20" autocomplete="off" placeholder="e.g. CRPF100999" required>
+          <label for="su-rank">Rank</label><select id="su-rank" required></select>
+          <label for="su-unit">Unit</label><select id="su-unit"></select>
+          <label for="su-newunit">Or create a demo unit <span class="muted">(optional)</span></label><input id="su-newunit" maxlength="60" autocomplete="off">
+          <label for="su-pass">Password</label><input id="su-pass" type="password" autocomplete="new-password" placeholder="8+ characters, letters and numbers" required>
+          <button id="su-btn" class="button primary full" type="submit">Create account</button>
+          <p id="su-err" class="form-message error hidden" role="alert"></p>
+        </form>
       </section>
-    </div>
-    <div class="cols">
-      <section class="card"><div class="section-head"><div><h3>Records used from HR systems</h3><p class="muted">Recent non-disciplinary organizational records.</p></div></div><div id="my-work-records"></div></section>
-      <section class="card"><h3>Something recorded incorrectly?</h3><p class="muted">Request a tracked review.</p>
-        <select id="correction-category"><option value="workload">Duty workload</option><option value="leave">Leave record</option><option value="deployment">Deployment record</option><option value="profile">Profile information</option><option value="other">Other</option></select>
-        <textarea id="correction-message" class="plain-textarea" placeholder="Describe what appears incorrect and what should be checked…"></textarea>
-        <button id="correction-submit" class="btn">Submit review request</button><div id="correction-list"></div></section>
-    </div>
-  </main>
+    </main>
+    <footer class="public-footer"><span>Prototype demonstration using simulated data</span><span>Private reflection is never an organizational signal</span></footer>
+  </div>
 
-  <main id="view-assessments" class="view hidden">
-    <section id="asmt-home">
-      <div class="asmt-hero">
-        <div class="asmt-hero-copy">
-          <span class="asmt-eyebrow">Your wellbeing check-in</span>
-          <h1>Take a small assessment</h1>
-          <p>Five simple questions about how you have felt over the last two weeks. It takes about one minute.</p>
-          <div class="asmt-trust"><span>✓ WHO-developed</span><span>✓ 5 questions</span><span>🔒 Confidential</span></div>
-          <button class="asmt-hero-action" data-start-asmt="WHO5">Start WHO-5 check <span>→</span></button>
-          <div id="who-last" class="asmt-last"></div>
+  <div id="app-view" class="app-shell hidden">
+    <aside class="sidebar">
+      <a class="brand sidebar-brand" href="#"><span class="brand-mark" aria-hidden="true">S</span><span><strong>SENTINEL</strong><small id="role-label">Workspace</small></span></a>
+      <nav id="nav" class="side-nav" aria-label="Primary navigation"></nav>
+      <div class="sidebar-note"><span aria-hidden="true">◇</span><p id="sidebar-promise">Purpose-limited access</p></div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <button id="mobile-menu" class="icon-button mobile-menu-button" type="button" aria-expanded="false" aria-controls="mobile-nav" aria-label="Open navigation">☰</button>
+        <div class="topbar-title"><span id="route-eyebrow">Workspace</span><strong id="route-title">Home</strong></div>
+        <div class="topbar-actions">
+          <span id="who" class="identity"></span>
+          <button class="icon-button" type="button" data-theme-toggle aria-label="Switch color theme"><span aria-hidden="true">◐</span></button>
+          <button id="logout" class="button quiet" type="button">Sign out</button>
         </div>
-        <div class="asmt-hero-mark" aria-hidden="true"><span>5</span><small>questions</small></div>
-      </div>
+      </header>
+      <nav id="mobile-nav" class="mobile-nav hidden" aria-label="Mobile navigation"></nav>
+      <div id="banner" class="demo-banner" role="note">Demo environment · Simulated data · Production access is role-authenticated</div>
 
-      <div class="asmt-library-head">
-        <div><h2>Explore assessments</h2><p class="muted">Choose a validated check for a specific area.</p></div>
-        <span class="asmt-source-note">Screening tools · not diagnoses</span>
-      </div>
-      <div id="asmt-grid" class="asmt-grid"></div>
-    </section>
+      <main id="main-content" tabindex="-1">
+        <section id="view-personnel-home" class="view hidden" aria-labelledby="personnel-home-title"><div id="personnel-home-content"></div></section>
+        <section id="view-personnel-insights" class="view hidden" aria-labelledby="personnel-insights-title"><div id="personnel-insights-content"></div></section>
+        <section id="view-work-context" class="view hidden" aria-labelledby="work-context-title"><div id="work-context-content"></div></section>
+        <section id="view-privacy-support" class="view hidden" aria-labelledby="privacy-support-title"><div id="privacy-support-content"></div></section>
 
-    <section id="asmt-runner" class="asmt-runner hidden" aria-live="polite">
-      <button id="asmt-exit" class="asmt-back">← All assessments</button>
-      <div class="asmt-runner-card">
-        <div class="asmt-runner-head">
-          <div><span id="asmt-kind" class="asmt-eyebrow"></span><h2 id="asmt-title"></h2></div>
-          <span id="asmt-step" class="asmt-step"></span>
-        </div>
-        <div class="asmt-progress"><div id="asmt-progress-bar"></div></div>
-        <p id="asmt-period" class="asmt-period"></p>
-        <h3 id="asmt-question" class="asmt-question"></h3>
-        <div id="asmt-options" class="asmt-options"></div>
-        <div class="asmt-controls">
-          <button id="asmt-prev" class="asmt-secondary">Back</button>
-          <button id="asmt-next" class="asmt-next" disabled>Next <span>→</span></button>
-        </div>
-      </div>
-      <p id="asmt-attribution" class="asmt-attribution"></p>
-    </section>
-
-    <section id="asmt-result" class="asmt-result hidden" aria-live="polite"></section>
-  </main>
-
-  <main id="view-journal" class="view hidden">
-    <div class="jr-tabs" role="tablist" aria-label="Journal sections">
-      <button class="jr-tab on" data-jr-pane="write">Write</button>
-      <button class="jr-tab" data-jr-pane="insights">Daily insights</button>
-      <button class="jr-tab" data-jr-pane="progress">Progress</button>
-    </div>
-    <div id="jr-pane-write" class="jr-pane">
-    <div class="card wide">
-      <div class="row-between">
-        <h3>Private journal <span class="pill">only you</span></h3>
-        <span id="jr-streak" class="muted"></span>
-      </div>
-      <p class="muted">Your writing is excluded from commander, welfare and risk views.</p>
-      <div class="jr-progress"><div id="jr-bar"></div></div>
-      <p id="jr-count" class="muted" style="margin:6px 0">0 / 750 words</p>
-            <div class="jr-voice">
-        <button id="jr-mic" class="mic-btn" title="Tap to speak" aria-pressed="false" aria-label="Start voice input">🎤</button>
-        <select id="jr-lang" title="Speech language">
-          <option value="auto">🌐 Auto — detect language</option>
-          <option value="en-IN">English (India)</option>
-          <option value="hi-IN">हिन्दी — Hindi</option>
-          <option value="bn-IN">বাংলা — Bengali</option>
-          <option value="ta-IN">தமிழ் — Tamil</option>
-          <option value="te-IN">తెలుగు — Telugu</option>
-          <option value="mr-IN">मराठी — Marathi</option>
-          <option value="gu-IN">ગુજરાતી — Gujarati</option>
-          <option value="kn-IN">ಕನ್ನಡ — Kannada</option>
-          <option value="ml-IN">മലയാളം — Malayalam</option>
-          <option value="pa-IN">ਪੰਜਾਬੀ — Punjabi</option>
-          <option value="or-IN">ଓଡ଼ିଆ — Odia</option>
-          <option value="ur-PK">اردو — Urdu</option>
-        </select>
-        <span id="jr-mic-status" class="muted"></span>
-      </div>
-      <textarea id="jr-editor" placeholder="Write about your day, your thoughts, anything on your mind…"></textarea>
-
-      <div id="jr-draft-wrap" class="jr-draft-wrap hidden">
-        <label for="jr-draft">Check this phrase before adding it:</label>
-        <textarea id="jr-draft" rows="2" placeholder="what the mic heard will appear here…"></textarea>
-        <div class="jr-draft-actions">
-          <button id="jr-draft-ok" class="mic-btn ok">✓ Add to journal</button>
-          <button id="jr-draft-no" class="mic-btn no">✕ Discard</button>
-        </div>
-      </div>
-      <div class="row-between" style="margin-top:8px">
-        <span id="jr-meta" class="muted"></span>
-        <span id="jr-save" class="muted">—</span>
-      </div>
-    </div>
-    <div class="card wide">
-      <h3>Last 14 days</h3>
-      <div id="jr-days" class="jr-days"></div>
-      <p id="jr-totals" class="muted" style="margin-top:10px"></p>
-    </div>
-    </div>
-
-    <div id="jr-pane-insights" class="jr-pane hidden">
-      <div class="jr-insight-head">
-        <div><h2>Daily writing insights</h2><p class="muted">Private, reflective patterns from your own words—not a diagnosis.</p></div>
-        <select id="jr-an-date" aria-label="Choose journal date"></select>
-      </div>
-      <div id="jr-an-empty" class="card wide hidden"><p class="muted">Write an entry first to see your personal insights.</p></div>
-      <div id="jr-an-content">
-        <div id="jr-an-summary" class="jr-an-summary"></div>
-        <section class="jr-an-box">
-          <h3>How fast you wrote</h3>
-          <canvas id="jr-an-speed" width="1000" height="235"></canvas>
-          <p id="jr-an-speed-note" class="muted"></p>
+        <section id="view-assessments" class="view hidden" aria-labelledby="assessments-title">
+          <div id="asmt-home">
+            <div class="assessment-hero">
+              <div>
+                <p class="eyebrow">Private wellbeing check</p>
+                <h1 id="assessments-title">Take a small assessment</h1>
+                <p>Start with five questions about the last two weeks. Your result is a screening aid, not a diagnosis.</p>
+                <div class="trust-row"><span>WHO-5</span><span>5 questions</span><span>About 1 minute</span></div>
+                <button class="button primary" type="button" data-start-asmt="WHO5">Start WHO-5 <span aria-hidden="true">→</span></button>
+                <span id="who-last" class="subtle-note"></span>
+              </div>
+              <div class="assessment-mark" aria-hidden="true"><strong>5</strong><span>questions</span></div>
+            </div>
+            <div class="section-heading"><div><p class="eyebrow">Assessment library</p><h2>Choose what feels useful</h2><p>Validated screening tools, explained in plain language.</p></div></div>
+            <div id="asmt-grid" class="assessment-grid"></div>
+            <section class="surface section-block" aria-labelledby="assessment-history-title"><div class="card-heading"><div><p class="eyebrow">Saved history</p><h2 id="assessment-history-title">Your assessment trend</h2></div><a class="text-link" href="#/personnel/journal/progress">See in Progress →</a></div><div id="asmt-history"></div></section>
+          </div>
+          <section id="asmt-runner" class="assessment-runner hidden" aria-live="polite">
+            <button id="asmt-exit" class="text-button" type="button">← All assessments</button>
+            <div class="surface assessment-runner-card">
+              <div class="card-heading"><div><p id="asmt-kind" class="eyebrow"></p><h2 id="asmt-title"></h2></div><span id="asmt-step" class="subtle-note"></span></div>
+              <div class="progress-track" aria-hidden="true"><div id="asmt-progress-bar"></div></div>
+              <p id="asmt-period" class="muted"></p>
+              <h3 id="asmt-question" class="assessment-question"></h3>
+              <div id="asmt-options" class="assessment-options"></div>
+              <div class="form-actions split"><button id="asmt-prev" class="button quiet" type="button">Back</button><button id="asmt-next" class="button primary" type="button" disabled>Next →</button></div>
+            </div>
+            <p id="asmt-attribution" class="source-note"></p>
+          </section>
+          <section id="asmt-result" class="assessment-result hidden" aria-live="polite"></section>
         </section>
-        <section class="jr-an-box"><h3>Mindset while writing</h3><div id="jr-an-mindset" class="jr-donuts"></div></section>
-        <div class="jr-an-grid">
-          <section class="jr-an-box"><h3>Feeling mostly</h3><div id="jr-an-feelings" class="jr-emoji-bars"></div></section>
-          <section class="jr-an-box"><h3>Thinking mostly about</h3><div id="jr-an-topics" class="jr-emoji-bars"></div></section>
-          <section class="jr-an-box"><h3>Time orientation</h3><div id="jr-an-time" class="jr-emoji-bars"></div></section>
-          <section class="jr-an-box"><h3>Primary sense</h3><div id="jr-an-senses" class="jr-emoji-bars"></div></section>
-        </div>
-        <section class="jr-an-box"><h3>Us and them</h3><div id="jr-an-pronouns" class="jr-emoji-bars compact"></div></section>
-        <p class="muted jr-privacy-note">Private keyword patterns · excluded from organizational analytics.</p>
-      </div>
+
+        <section id="view-journal" class="view journal-view hidden" aria-labelledby="journal-title">
+          <div class="page-heading compact"><div><p class="eyebrow">Private journal</p><h1 id="journal-title">A place that belongs to you</h1><p>Your entries and personal writing insights remain outside Welfare and Command.</p></div><span class="privacy-chip"><span aria-hidden="true">▣</span> Only you</span></div>
+          <div class="journal-tabs" role="tablist" aria-label="Journal sections">
+            <button class="journal-tab" type="button" role="tab" aria-controls="jr-pane-write" data-jr-pane="write">Write</button>
+            <button class="journal-tab" type="button" role="tab" aria-controls="jr-pane-insights" data-jr-pane="insights">Daily Insights</button>
+            <button class="journal-tab" type="button" role="tab" aria-controls="jr-pane-progress" data-jr-pane="progress">Progress</button>
+          </div>
+
+          <div id="jr-pane-write" class="journal-pane" role="tabpanel">
+            <div class="journal-layout">
+              <section class="surface journal-editor-card">
+                <div class="card-heading"><div><p class="eyebrow">Today’s reflection</p><h2 id="jr-entry-heading">Write privately</h2></div><span id="jr-save" class="save-status" role="status" aria-live="polite">Not saved yet</span></div>
+                <div class="journal-actions">
+                  <button id="jr-mic" class="speak-button" type="button" aria-pressed="false" aria-label="Start private voice input"><span aria-hidden="true">●</span> Speak privately</button>
+                  <label class="language-field" for="jr-lang"><span>Language</span><select id="jr-lang">
+                    <option value="auto">Hindi • English • Hinglish (auto)</option>
+                    <option value="en-IN">English (India)</option><option value="hi-IN">हिन्दी — Hindi</option>
+                    <option value="bn-IN">বাংলা — Bengali</option><option value="ta-IN">தமிழ் — Tamil</option><option value="te-IN">తెలుగు — Telugu</option>
+                    <option value="mr-IN">मराठी — Marathi</option><option value="gu-IN">ગુજરાતી — Gujarati</option><option value="kn-IN">ಕನ್ನಡ — Kannada</option>
+                    <option value="ml-IN">മലയാളം — Malayalam</option><option value="pa-IN">ਪੰਜਾਬੀ — Punjabi</option><option value="or-IN">ଓଡ଼ିଆ — Odia</option><option value="ur-PK">اردو — Urdu</option>
+                  </select></label>
+                  <span id="jr-mic-status" class="muted" role="status" aria-live="polite"></span>
+                </div>
+                <p class="voice-privacy">Voice is transcribed by your browser. SENTINEL stores the text you approve, not an audio recording.</p>
+                <div class="prompt-row" aria-label="Optional writing prompts">
+                  <span>Optional prompt:</span>
+                  <button type="button" data-journal-prompt="What is occupying my mind right now?">What’s on my mind?</button>
+                  <button type="button" data-journal-prompt="What felt difficult today?">What felt difficult?</button>
+                  <button type="button" data-journal-prompt="What went better than expected?">What went well?</button>
+                  <button type="button" data-journal-prompt="Did anything affect my sleep?">Sleep</button>
+                </div>
+                <label class="sr-only" for="jr-editor">Private journal entry</label>
+                <textarea id="jr-editor" placeholder="Write about your day, your thoughts, anything on your mind…"></textarea>
+                <div id="jr-draft-wrap" class="review-box hidden">
+                  <label for="jr-draft">Check this phrase before adding it</label>
+                  <textarea id="jr-draft" rows="2"></textarea>
+                  <div class="form-actions"><button id="jr-draft-ok" class="button primary" type="button">Add to journal</button><button id="jr-draft-no" class="button quiet" type="button">Discard</button></div>
+                </div>
+                <div class="word-progress"><div id="jr-bar"></div></div>
+                <div class="journal-meta"><span id="jr-count">0 words</span><span id="jr-meta">0 min today</span></div>
+              </section>
+              <aside class="surface journal-history-card">
+                <div class="card-heading"><div><p class="eyebrow">Your history</p><h2>Recent reflections</h2></div><button id="jr-today" class="text-button hidden" type="button">Return to today</button></div>
+                <label for="jr-search" class="sr-only">Search journal dates</label><input id="jr-search" type="search" placeholder="Search by date">
+                <div id="jr-days" class="journal-days"></div>
+                <p id="jr-totals" class="subtle-note"></p>
+              </aside>
+            </div>
+          </div>
+
+          <div id="jr-pane-insights" class="journal-pane hidden" role="tabpanel">
+            <div class="section-heading split-heading"><div><p class="eyebrow">Private reflection analytics</p><h2>Today, in your own words</h2><p>Experimental personal patterns—not a diagnosis and never an organizational signal.</p></div><label for="jr-an-date">Entry date<select id="jr-an-date"></select></label></div>
+            <div id="jr-an-empty" class="empty-state hidden"><h3>No insights yet</h3><p>Start with a one-minute reflection.</p></div>
+            <div id="jr-an-content">
+              <div id="jr-an-summary" class="insight-lead"></div>
+              <div id="jr-an-story" class="story-grid"></div>
+              <section class="surface section-block"><div class="card-heading"><div><span class="experimental-label">Experimental Personal Insight</span><h2>Writing activity</h2></div></div><canvas id="jr-an-speed" width="1000" height="235" role="img" aria-label="Writing activity over time"></canvas><p id="jr-an-speed-note" class="source-note"></p><details class="explanation"><summary>What does this mean?</summary><p>Based on word-count samples during this entry. Pauses may reflect thinking, interruption, or editing; they are not a wellbeing measure.</p></details></section>
+              <section class="surface section-block"><div class="card-heading"><div><span class="experimental-label">Experimental Personal Insight</span><h2>Mindset while writing</h2></div></div><div id="jr-an-mindset" class="donut-grid"></div><details class="explanation"><summary>How is this calculated?</summary><p>Simple private keyword patterns compare writing styles. These labels are exploratory, can be wrong, and are not personality or clinical assessments.</p></details></section>
+              <div class="analysis-grid">
+                <section class="surface insight-box"><span class="experimental-label">Experimental</span><h2>Feeling mostly</h2><div id="jr-an-feelings" class="word-bars"></div><details class="explanation"><summary>What does this mean?</summary><p>Counts emotion-related words in this entry. Context, sarcasm and multilingual phrasing can change the meaning.</p></details></section>
+                <section class="surface insight-box"><span class="experimental-label">Experimental</span><h2>Thinking mostly about</h2><div id="jr-an-topics" class="word-bars"></div><details class="explanation"><summary>What does this mean?</summary><p>Groups repeated private keywords into broad themes to help you revisit what occupied your attention.</p></details></section>
+                <section class="surface insight-box"><span class="experimental-label">Experimental</span><h2>Time orientation</h2><div id="jr-an-time" class="word-bars"></div><details class="explanation"><summary>What does this mean?</summary><p>Looks for past-, present- and future-oriented language. It does not judge whether one orientation is better.</p></details></section>
+                <section class="surface insight-box"><span class="experimental-label">Experimental</span><h2>Primary sense</h2><div id="jr-an-senses" class="word-bars"></div><details class="explanation"><summary>What does this mean?</summary><p>Counts sensory language such as seeing, hearing or feeling. It is a writing observation only.</p></details></section>
+              </div>
+              <section class="surface insight-box"><span class="experimental-label">Experimental</span><h2>Us and them</h2><div id="jr-an-pronouns" class="word-bars compact"></div><details class="explanation"><summary>What does this mean?</summary><p>Compares pronoun use in this entry. It cannot determine relationships, belonging or conflict.</p></details></section>
+              <p class="privacy-footnote">Private keyword patterns · Only you can see them · Not used for prediction or casework</p>
+            </div>
+          </div>
+
+          <div id="jr-pane-progress" class="journal-pane hidden" role="tabpanel">
+            <div class="section-heading"><div><p class="eyebrow">Long-term personal view</p><h2>How have things changed?</h2><p>Bring your check-ins, assessments, work context and private reflection activity together.</p></div><div class="segmented" aria-label="Progress period"><button type="button" data-progress-days="7">7 days</button><button type="button" data-progress-days="30" class="on">30 days</button><button type="button" data-progress-days="90">90 days</button><button type="button" data-progress-days="all">Long term</button></div></div>
+            <div id="jr-progress-content"></div>
+            <section class="surface section-block"><div class="card-heading"><div><p class="eyebrow">Reflection activity</p><h2>Writing over the last 30 days</h2></div><span class="subtle-note">No streak required</span></div><div id="jr-stat-cards" class="metric-grid compact-metrics"></div><canvas id="jr-stat-chart" width="1000" height="270" role="img" aria-label="Journal word counts over the last 30 days"></canvas></section>
+            <section class="surface section-block"><div class="card-heading"><div><p class="eyebrow">Personal milestones</p><h2>Moments you may want to remember</h2></div></div><div id="jr-badges"></div></section>
+          </div>
+        </section>
+
+        <section id="view-welfare-overview" class="view hidden"><div id="welfare-overview-content"></div></section>
+        <section id="view-welfare-cases" class="view hidden"><div id="welfare-cases-content"></div></section>
+        <section id="view-welfare-case" class="view hidden"><div id="welfare-case-content"></div></section>
+        <section id="view-welfare-followups" class="view hidden"><div id="welfare-followups-content"></div></section>
+        <section id="view-record-reviews" class="view hidden"><div id="record-reviews-content"></div></section>
+        <section id="view-welfare-insights" class="view hidden"><div id="welfare-insights-content"></div></section>
+
+        <section id="view-commander-overview" class="view hidden"><div id="commander-overview-content"></div></section>
+        <section id="view-commander-units" class="view hidden"><div id="commander-units-content"></div></section>
+        <section id="view-commander-indicators" class="view hidden"><div id="commander-indicators-content"></div></section>
+        <section id="view-commander-actions" class="view hidden"><div id="commander-actions-content"></div></section>
+        <section id="view-commander-trends" class="view hidden"><div id="commander-trends-content"></div></section>
+      </main>
     </div>
+  </div>
 
-    <div id="jr-pane-progress" class="jr-pane hidden">
-      <div id="jr-stat-cards" class="jr-stat-cards"></div>
-      <section class="jr-an-box"><div class="row-between"><h3>Last 30 days</h3><span class="muted">400 blue zone · 750 goal</span></div>
-        <canvas id="jr-stat-chart" width="1000" height="270"></canvas></section>
-      <section class="jr-an-box"><h3>Achievements</h3><div id="jr-badges"></div></section>
-    </div>
-  </main>
-
-  <main id="view-commander" class="view hidden">
-    <div class="view-heading"><div><p class="eyebrow">Command workspace</p><h1>Operational conditions</h1><p>Spot unit pressure and act on workload, recovery and resourcing.</p></div><span class="scope-note">Aggregate only · groups of 5+</span></div>
-    <div id="cmd-status" class="workspace-status" role="status" aria-live="polite"></div>
-    <div id="cmd-totals" class="metric-strip"></div>
-    <div class="cols cmd-grid"><section class="card action-card"><div class="section-head"><div><p class="section-kicker">Act next</p><h3>Priority organizational actions</h3></div><span id="cmd-action-count" class="count-badge">0</span></div><div id="cmd-actions"></div></section>
-      <section class="card guardrail-card"><div class="guardrail-heading"><span class="guardrail-icon" aria-hidden="true">◇</span><div><p class="section-kicker">Privacy guardrail</p><h3>Conditions, never case files</h3></div></div><p>Commanders see unit workload and sufficiently large pulse groups. Names, journals, assessments and support notes stay hidden.</p><details class="boundary-details"><summary>How to use this view</summary><p>Use it for staffing, rosters, leave, recovery and resources—not diagnosis or discipline.</p></details></section></div>
-    <section class="card wide"><div class="section-head dashboard-section-head"><div><p class="section-kicker">Compare units</p><h3>Unit pressure overview</h3><p class="muted">Organizational records: 90 days · voluntary pulse: 14 days</p></div><span id="cmd-unit-count" class="count-badge">0 units</span></div>
-      <div class="dashboard-toolbar" aria-label="Unit table filters">
-        <label class="search-control"><span class="sr-only">Search units</span><input id="cmd-search" type="search" placeholder="Search unit or region" autocomplete="off"></label>
-        <label><span class="sr-only">Filter by region</span><select id="cmd-region"><option value="all">All regions</option></select></label>
-        <label><span class="sr-only">Sort units</span><select id="cmd-sort"><option value="priority">Action first</option><option value="overtime">Highest overtime</option><option value="leave">Most leave denials</option><option value="incidents">Most incidents</option><option value="name">Unit A–Z</option></select></label>
-        <span id="cmd-filter-summary" class="filter-summary" role="status"></span>
-      </div>
-      <div class="table-wrap"><table id="unit-table" class="tbl unit-table"></table></div></section>
-    <section class="card wide trend-card"><div class="section-head"><div><p class="section-kicker">30-day view</p><h3>Support-priority trend</h3></div><span class="scope-note">Aggregate count</span></div><canvas id="trend-chart" width="1100" height="220"></canvas></section>
-  </main>
-
-  <main id="view-welfare" class="view hidden">
-    <div class="view-heading"><div><p class="eyebrow">Welfare operations</p><h1>Support casework</h1><p>Triage priority cases, coordinate support and close the loop.</p></div><div class="heading-actions"><span id="wf-updated" class="sync-status" role="status" aria-live="polite"></span><button id="recalc" class="btn">Refresh priorities</button></div></div>
-    <div id="wf-summary" class="metric-strip"></div>
-    <div class="case-layout"><section class="card queue-card"><div class="section-head dashboard-section-head"><div><p class="section-kicker">Triage</p><h3>Cases needing attention</h3></div><span id="case-count" class="count-badge">0 cases</span></div>
-        <div class="dashboard-toolbar case-toolbar" aria-label="Case queue filters">
-          <label class="search-control"><span class="sr-only">Search cases</span><input id="wf-search" type="search" placeholder="Search name, ID or unit" autocomplete="off"></label>
-          <label><span class="sr-only">Filter by case status</span><select id="case-filter"><option value="open">Open cases</option><option value="new">New only</option><option value="acknowledged">Acknowledged</option><option value="closed">Closed</option><option value="all">All cases</option></select></label>
-          <label><span class="sr-only">Filter by priority</span><select id="case-level"><option value="all">All priorities</option><option value="Critical">Critical</option><option value="Elevated">Elevated</option></select></label>
-        </div><div id="alerts-list" class="case-list" aria-live="polite"></div></section>
-      <section class="card review-card"><div class="section-head"><div><p class="section-kicker">Verify records</p><h3>Data-review requests</h3></div><span id="correction-count" class="count-badge">0</span></div><div id="correction-queue"></div></section></div>
-    <section class="card wide"><div class="section-head dashboard-section-head"><div><p class="section-kicker">Review queue</p><h3>Support-priority roster</h3><p class="muted">For support planning—not diagnosis or misconduct.</p></div><span id="roster-count" class="count-badge">0 people</span></div>
-      <div class="dashboard-toolbar roster-toolbar" aria-label="Roster filters">
-        <label class="search-control"><span class="sr-only">Search roster</span><input id="roster-search" type="search" placeholder="Search name, ID or signal" autocomplete="off"></label>
-        <label><span class="sr-only">Filter roster by priority</span><select id="roster-band"><option value="all">All priorities</option><option value="Critical">Critical</option><option value="Elevated">Elevated</option><option value="Watch">Watch</option></select></label>
-        <label><span class="sr-only">Filter roster by unit</span><select id="roster-unit"><option value="all">All units</option></select></label>
-        <span id="roster-filter-summary" class="filter-summary" role="status"></span>
-      </div><div id="roster" class="roster-table" aria-live="polite"></div></section>
-  </main>
-
-  <main id="view-person" class="view hidden">
-    <button id="back-welfare" class="btn ghost">← Back to roster</button>
-    <div id="person-detail"></div>
-  </main>
-</div>
-
-<div id="toast" class="toast hidden"></div>
-<dialog id="action-dialog" class="action-dialog">
-  <form method="dialog"><h3 id="dialog-title"></h3><p id="dialog-help" class="muted"></p>
-    <textarea id="dialog-note" class="plain-textarea"></textarea>
-    <div class="dialog-actions"><button value="cancel" class="btn ghost">Cancel</button><button id="dialog-confirm" value="default" class="btn primary">Confirm</button></div>
-  </form>
-</dialog>
-<script src="app.js"></script>
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+  <dialog id="confirm-dialog" class="dialog"><form method="dialog"><h2 id="dialog-title"></h2><p id="dialog-help" class="muted"></p><label id="dialog-note-label" for="dialog-note">Note</label><textarea id="dialog-note"></textarea><div class="form-actions end"><button value="cancel" class="button quiet">Cancel</button><button id="dialog-confirm" value="default" class="button primary">Confirm</button></div></form></dialog>
+  <script src="app.js"></script>
 </body>
 </html>
