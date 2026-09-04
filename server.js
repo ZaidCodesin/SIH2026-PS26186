@@ -692,6 +692,158 @@ app.get('/api/dashboard/unit', requireAuth(['commander']), (req, res) => {
   send(res, 200, { units: out, totals, actions, trend, privacy:{k_min:K_MIN, note:'Pulse values are suppressed below five respondents; commanders receive no individual wellbeing records.'} });
 });
 
+/* ---------------- support cases: legitimate workflows only ---------------- */
+const CASE_REASONS = ['work_pressure', 'personal_difficulty', 'family', 'health', 'post_incident', 'other'];
+const CASE_STATUSES = ['New', 'Contacted', 'In support', 'Monitoring', 'Resolved'];
+const CASE_PRIORITIES = ['Urgent', 'High', 'Routine'];
+
+app.post('/api/support/request', requireAuth(['personnel']), (req, res) => {
+  const pid = req.user.personnel_id;
+  if (!pid) return send(res, 400, { error: 'No personnel record linked' });
+  const b = req.body || {};
+  const reason = String(b.reason || '').trim();
+  const details = String(b.details || '').trim();
+  if (!CASE_REASONS.includes(reason)) return send(res, 400, { error: 'Choose a reason for the request' });
+  if (details.length > 2000) return send(res, 400, { error: 'Keep details under 2000 characters' });
+  const priority = ['post_incident', 'health'].includes(reason) ? 'High' : 'Routine';
+  const open = db.prepare(`SELECT id FROM support_cases WHERE personnel_id = ? AND status != 'Resolved'`).get(pid);
+  if (open) return send(res, 400, { error: 'You already have an active support case' });
+  const id = Number(db.prepare(`INSERT INTO support_cases
+    (personnel_id, source, reason, details, priority, status, next_action, created_at)
+    VALUES (?,?,?,?,?,?,?,?)`)
+    .run(pid, 'self_request', reason, details, priority, 'New', 'Initial contact', new Date().toISOString()).lastInsertRowid);
+  db.prepare('UPDATE personnel SET welfare_share = 1 WHERE id = ?').run(pid);
+  audit(req.user, 'support_case_opened', pid, reason);
+  send(res, 200, { ok: true, case_id: id });
+});
+
+app.get('/api/my-support', requireAuth(['personnel']), (req, res) => {
+  const pid = req.user.personnel_id;
+  if (!pid) return send(res, 400, { error: 'No personnel record linked' });
+  const cases = db.prepare(`SELECT id, reason, priority, status, next_action, follow_up_due, created_at, resolved_at
+    FROM support_cases WHERE personnel_id = ? ORDER BY created_at DESC LIMIT 5`).all(pid);
+  const share = db.prepare('SELECT welfare_share, aggregate_consent FROM personnel WHERE id = ?').get(pid);
+  send(res, 200, { cases, welfare_share: !!share.welfare_share, aggregate_consent: !!share.aggregate_consent });
+});
+
+app.post('/api/my-consent', requireAuth(['personnel']), (req, res) => {
+  const pid = req.user.personnel_id;
+  if (!pid) return send(res, 400, { error: 'No personnel record linked' });
+  const aggregate = req.body && req.body.aggregate_consent ? 1 : 0;
+  db.prepare('UPDATE personnel SET aggregate_consent = ? WHERE id = ?').run(aggregate, pid);
+  audit(req.user, aggregate ? 'consent_aggregate_on' : 'consent_aggregate_off', pid, 'Privacy center');
+  send(res, 200, { ok: true, aggregate_consent: !!aggregate });
+});
+
+app.get('/api/my-privacy', requireAuth(['personnel']), (req, res) => {
+  const pid = req.user.personnel_id;
+  if (!pid) return send(res, 400, { error: 'No personnel record linked' });
+  const accesses = db.prepare(`SELECT a.action, a.at, u.name AS actor, u.role FROM audit_log a
+    JOIN users u ON u.id = a.actor_id WHERE a.target_personnel = ? ORDER BY a.at DESC LIMIT 20`).all(pid);
+  const journalTouches = db.prepare(`SELECT COUNT(*) c FROM audit_log a WHERE a.target_personnel = ?
+    AND (a.action LIKE '%journal%' OR a.action LIKE '%analysis%')`).get(pid).c;
+  const share = db.prepare('SELECT welfare_share, aggregate_consent FROM personnel WHERE id = ?').get(pid);
+  send(res, 200, {
+    accesses, journal_touches: journalTouches,
+    welfare_share: !!share.welfare_share, aggregate_consent: !!share.aggregate_consent,
+    workload: workloadFor(pid),
+    matrix: {
+      journal: { personnel: 'only you', welfare: 'never', commander: 'never' },
+      checkins: { personnel: 'only you', welfare: 'with your consent', commander: 'aggregate only' },
+      assessments: { personnel: 'only you', welfare: 'with your consent', commander: 'never individual' },
+      support_case: { personnel: 'yours', welfare: 'assigned officer', commander: 'never' },
+      work_records: { personnel: 'your own', welfare: 'active cases', commander: 'unit aggregate' }
+    }
+  });
+});
+
+/* ---------------- welfare: support case queue & workflow ---------------- */
+app.get('/api/welfare/cases', requireAuth(['welfare']), (req, res) => {
+  const today = todayStr();
+  const rows = db.prepare(`SELECT c.*, p.rank, p.name, p.force_id, u.name AS unit
+    FROM support_cases c JOIN personnel p ON p.id = c.personnel_id
+    LEFT JOIN units u ON u.id = p.unit_id ORDER BY
+    CASE c.priority WHEN 'Urgent' THEN 0 WHEN 'High' THEN 1 ELSE 2 END,
+    CASE c.status WHEN 'New' THEN 0 WHEN 'Contacted' THEN 1 WHEN 'In support' THEN 2 WHEN 'Monitoring' THEN 3 ELSE 4 END,
+    c.created_at`).all();
+  const open = rows.filter(c => c.status !== 'Resolved');
+  send(res, 200, {
+    cases: rows,
+    metrics: {
+      open: open.length,
+      needs_attention: open.filter(c => c.priority === 'Urgent' || c.priority === 'High').length,
+      overdue_follow_ups: open.filter(c => c.follow_up_due && c.follow_up_due < today).length,
+      awaiting_response: open.filter(c => c.status === 'Contacted').length
+    }
+  });
+});
+
+app.get('/api/welfare/cases/:id', requireAuth(['welfare']), (req, res) => {
+  const c = db.prepare(`SELECT c.*, p.rank, p.name, p.force_id, p.id AS pid, u.name AS unit
+    FROM support_cases c JOIN personnel p ON p.id = c.personnel_id
+    LEFT JOIN units u ON u.id = p.unit_id WHERE c.id = ?`).get(req.params.id);
+  if (!c) return send(res, 404, { error: 'Case not found' });
+  const notes = db.prepare(`SELECT n.note, n.at, u.name AS author FROM case_notes n
+    JOIN users u ON u.id = n.author_id WHERE n.case_id = ? ORDER BY n.at DESC`).all(c.id);
+  // consented context ONLY: a voluntary check-in summary when the person has an
+  // active share. Journal content, journal analysis and assessment answers are
+  // never returned to welfare under any circumstance.
+  const shared = db.prepare('SELECT welfare_share FROM personnel WHERE id = ?').get(c.pid);
+  let consented = null;
+  if (shared && shared.welfare_share) {
+    const recent = db.prepare(`SELECT date, stress, sleep_hours, mood FROM checkins
+      WHERE personnel_id = ? ORDER BY date DESC LIMIT 14`).all(c.pid);
+    consented = { kind: 'voluntary_checkins', note: 'Shared by the person for this support case',
+      stress: avgNum(recent, 'stress'), sleep: avgNum(recent, 'sleep_hours'), responses: recent.length };
+  }
+  audit(req.user, 'view_support_case', c.pid, 'Case #' + c.id);
+  send(res, 200, {
+    case: { id: c.id, reason: c.reason, details: c.details, source: c.source, priority: c.priority,
+      status: c.status, next_action: c.next_action, follow_up_due: c.follow_up_due,
+      last_contact_at: c.last_contact_at, created_at: c.created_at, resolved_at: c.resolved_at },
+    person: { id: c.pid, rank: c.rank, name: c.name, force_id: c.force_id, unit: c.unit || '—' },
+    consented_context: consented,
+    work_context: workloadFor(c.pid),
+    notes
+  });
+});
+
+app.post('/api/welfare/cases/:id', requireAuth(['welfare']), (req, res) => {
+  const c = db.prepare('SELECT * FROM support_cases WHERE id = ?').get(req.params.id);
+  if (!c) return send(res, 404, { error: 'Case not found' });
+  const b = req.body || {};
+  const updates = {};
+  if (b.status !== undefined) {
+    if (!CASE_STATUSES.includes(b.status)) return send(res, 400, { error: 'Invalid status' });
+    updates.status = b.status;
+    if (b.status === 'Resolved') {
+      updates.resolved_at = new Date().toISOString();
+      db.prepare('UPDATE personnel SET welfare_share = 0 WHERE id = ?').run(c.personnel_id);
+    } else {
+      updates.last_contact_at = new Date().toISOString();
+    }
+  }
+  if (b.next_action !== undefined) updates.next_action = String(b.next_action).slice(0, 200);
+  if (b.follow_up_due !== undefined) {
+    if (b.follow_up_due && !/^\d{4}-\d{2}-\d{2}$/.test(b.follow_up_due)) return send(res, 400, { error: 'Bad date' });
+    updates.follow_up_due = b.follow_up_due || null;
+  }
+  if (b.priority !== undefined) {
+    if (!CASE_PRIORITIES.includes(b.priority)) return send(res, 400, { error: 'Invalid priority' });
+    updates.priority = b.priority;
+  }
+  const keys = Object.keys(updates);
+  if (keys.length) {
+    db.prepare(`UPDATE support_cases SET ${keys.map(k => k + '=?').join(', ')} WHERE id = ?`)
+      .run(...keys.map(k => updates[k]), c.id);
+  }
+  const note = String(b.note || '').trim();
+  if (note) db.prepare('INSERT INTO case_notes (case_id, author_id, note, at) VALUES (?,?,?,?)')
+    .run(c.id, req.user.id, note.slice(0, 1000), new Date().toISOString());
+  if (keys.length || note) audit(req.user, 'update_support_case', c.personnel_id, 'Case #' + c.id);
+  send(res, 200, { ok: true });
+});
+
 // Never let an old HTML/app.js stay paired with a newly deployed API. Assets such
 // as CSS/images may still be revalidated by the browser, but application shells
 // are always fetched fresh after a Render deployment.
